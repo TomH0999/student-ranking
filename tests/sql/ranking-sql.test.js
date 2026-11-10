@@ -6,7 +6,7 @@
  *  - signal temps réel ; robustesse face aux données absurdes ; idempotence ; désinstallation.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { createDatabase, asRole, createUser, addGrade, join, snapshot, pulseVersion, RANKING_SQL, RANKING_SQL_V1_0_1, UNINSTALL_SQL } from "./pglite-env.js";
+import { createDatabase, asRole, createUser, addGrade, join, snapshot, pulseVersion, RANKING_SQL, RANKING_SQL_V1_0_1, RANKING_SQL_V1_1_0, UNINSTALL_SQL } from "./pglite-env.js";
 import { calculateAllAverages, sortGradesForCalculation } from "../reference/grades-calc.js";
 import { ALL_SUBJECTS, PROGRAM_S1, COEFFICIENTS_UE } from "../../js/program.js";
 
@@ -243,13 +243,13 @@ describe("profil personnalisable et visibilité", () => {
     });
 
     it("les informations renseignées sont visibles par défaut, sauf le n° étudiant et le détail des notes", async () => {
-        await setProfile(nina, { origin: "sti2d", class_name: "S1A", td_group: "TD2", track: "racdv", student_number: "22104567" });
-        expect(await rowOf(omar, "Nina")).toMatchObject({ origin: "sti2d", class_name: "S1A", td_group: "TD2", track: "racdv", student_number: null, shares_grades: false });
+        await setProfile(nina, { origin: "sti2d", class_name: "S3", td_group: "TD2", track: "racdv", student_number: "22104567" });
+        expect(await rowOf(omar, "Nina")).toMatchObject({ origin: "sti2d", class_name: "S3", td_group: "TD2", track: "racdv", student_number: null, shares_grades: false });
     });
 
     it("chaque information masquée n'est plus transmise, y compris à soi-même", async () => {
         await setProfile(nina, { show_origin: false, show_td_group: false, show_student_number: true });
-        expect(await rowOf(omar, "Nina")).toMatchObject({ origin: null, class_name: "S1A", td_group: null, track: "racdv", student_number: "22104567" });
+        expect(await rowOf(omar, "Nina")).toMatchObject({ origin: null, class_name: "S3", td_group: null, track: "racdv", student_number: "22104567" });
         expect(await rowOf(nina, "Nina")).toMatchObject({ origin: null, td_group: null, is_me: true });
         await setProfile(nina, { show_class: false, show_track: false, show_student_number: false });
         const row = await rowOf(omar, "Nina");
@@ -257,7 +257,7 @@ describe("profil personnalisable et visibilité", () => {
         expect(JSON.stringify(await snapshot(db, omar))).not.toContain("22104567");
         // Le propriétaire, lui, relit tout dans son profil
         const own = await asRole(db, nina, (tx) => tx.query("select origin, class_name, student_number from public.ranking_profiles"));
-        expect(own.rows).toEqual([{ origin: "sti2d", class_name: "S1A", student_number: "22104567" }]);
+        expect(own.rows).toEqual([{ origin: "sti2d", class_name: "S3", student_number: "22104567" }]);
     });
 
     it("nom affiché : pseudo par défaut, prénom et nom sur demande, repli si rien n'est renseigné", async () => {
@@ -299,12 +299,14 @@ describe("profil personnalisable et visibilité", () => {
 
     it("valeurs refusées par la base", async () => {
         const bad = [
-            { origin: "inconnu" }, { track: "pirate" }, { name_mode: "autre" }, { class_name: "s1a" }, { class_name: " S1A" },
-            { class_name: "X".repeat(17) }, { td_group: "" }, { student_number: "12 34" }, { student_number: "1".repeat(21) },
+            { origin: "inconnu" }, { track: "pirate" }, { name_mode: "autre" }, { class_name: "s1" }, { class_name: " S1" },
+            { class_name: "S8" }, { class_name: "S1A" }, { td_group: "" }, { td_group: "TD3" }, { td_group: "td1" }, { student_number: "12 34" }, { student_number: "1".repeat(21) },
             { first_name: "Étudiant" }, { first_name: "x".repeat(31) }, { last_name: " Dupont" }
         ];
         for (const patch of bad) await expect(setProfile(paul, patch), JSON.stringify(patch)).rejects.toThrow(/ranking_profiles_details_check/);
-        await setProfile(paul, { origin: "general", track: "indecis", class_name: "S1B", td_group: "TD1", student_number: "A1234", first_name: "Paul", last_name: "Martin" });
+        await setProfile(paul, { origin: "general", track: "indecis", class_name: "S7", td_group: "TD1", student_number: "A1234", first_name: "Paul", last_name: "Martin" });
+        for (const c of ["S1", "S2", "S3", "S4", "S5", "S6", "S7"]) await setProfile(paul, { class_name: c });
+        for (const g of ["TD1", "TD2"]) await setProfile(paul, { td_group: g });
     });
 
     it("on ne peut toujours modifier que son propre profil, et pas sa date ni son identifiant", async () => {
@@ -352,6 +354,74 @@ describe("mise à jour depuis la v1.0.1", () => {
         const profiles = await old.query("select count(*)::int as n from public.ranking_profiles");
         expect(profiles.rows[0].n).toBe(3);
         await old.close();
+    });
+});
+
+describe("mise à jour depuis la v1.1.0", () => {
+    it("les valeurs de la liste sont conservées, les saisies libres hors liste sont effacées, le reste ne bouge pas", async () => {
+        const old = await createDatabase({ ranking: false });
+        await old.exec(RANKING_SQL_V1_1_0);
+        const a = await createUser(old, "v11-a@example.com");
+        const b = await createUser(old, "v11-b@example.com");
+        await join(old, a, "Dans la liste");
+        await join(old, b, "Hors liste");
+        await addGrade(old, a, { subjectCode: "R1.01", score: 13, max: 20, coeff: 1, createdAt: 1 });
+        await addGrade(old, b, { subjectCode: "R1.01", score: 9, max: 20, coeff: 1, createdAt: 1 });
+        await asRole(old, a, (tx) => tx.query("update public.ranking_profiles set class_name = 'S7', td_group = 'TD2', origin = 'sti2d', show_grades = true where user_id = $1", [a]));
+        await asRole(old, b, (tx) => tx.query("update public.ranking_profiles set class_name = 'S1A', td_group = 'TD GROUPE 3', track = 'dacs', first_name = 'Bea' where user_id = $1", [b]));
+
+        await old.exec(RANKING_SQL);
+        await old.exec(RANKING_SQL);
+
+        const rows = await old.query("select display_name, class_name, td_group, origin, track, first_name, show_grades from public.ranking_profiles order by display_name");
+        expect(rows.rows).toEqual([
+            { display_name: "Dans la liste", class_name: "S7", td_group: "TD2", origin: "sti2d", track: null, first_name: null, show_grades: true },
+            { display_name: "Hors liste", class_name: null, td_group: null, origin: null, track: "dacs", first_name: "Bea", show_grades: false }
+        ]);
+        expect((await snapshot(old, a)).map((r) => [r.display_name, r.general_average])).toEqual([["Dans la liste", 13], ["Hors liste", 9]]);
+        await old.close();
+    });
+});
+
+describe("suppression de son compte", () => {
+    it("supprime le compte, ses notes, devoirs, réglages et son profil ; les autres comptes sont intacts", async () => {
+        const quitter = await createUser(db, "partant@example.com");
+        const stayer = await createUser(db, "restant@example.com");
+        await join(db, quitter, "Partant");
+        await join(db, stayer, "Restant");
+        await addGrade(db, quitter, { subjectCode: "R1.01", score: 12, max: 20, coeff: 1, createdAt: 1 });
+        await addGrade(db, stayer, { subjectCode: "R1.01", score: 14, max: 20, coeff: 1, createdAt: 1 });
+        await asRole(db, quitter, (tx) =>
+            tx.query("insert into public.items (user_id, id, collection, data) values ($1, $2, 'homework', '{\"title\":\"DM\"}'), ($1, $3, 'settings', '{\"key\":\"k\",\"value\":1}')", [quitter, crypto.randomUUID(), crypto.randomUUID()])
+        );
+        const count = async (sql, user) => (await db.query(sql, [user])).rows[0].n;
+        expect(await count("select count(*)::int as n from public.items where user_id = $1", quitter)).toBe(3);
+        const pulse = await pulseVersion(db);
+
+        await asRole(db, quitter, (tx) => tx.query("select public.ranking_delete_account()"));
+
+        expect(await count("select count(*)::int as n from auth.users where id = $1", quitter)).toBe(0);
+        expect(await count("select count(*)::int as n from public.items where user_id = $1", quitter)).toBe(0);
+        expect(await count("select count(*)::int as n from public.ranking_profiles where user_id = $1", quitter)).toBe(0);
+        expect(await count("select count(*)::int as n from auth.users where id = $1", stayer)).toBe(1);
+        expect(await count("select count(*)::int as n from public.items where user_id = $1", stayer)).toBe(1);
+        const names = (await snapshot(db, stayer)).map((r) => r.display_name);
+        expect(names).toContain("Restant");
+        expect(names).not.toContain("Partant");
+        // Les autres écrans sont prévenus en direct
+        expect(await pulseVersion(db)).toBeGreaterThan(pulse);
+        // Le pseudo est de nouveau disponible
+        await asRole(db, stayer, (tx) => tx.query("update public.ranking_profiles set display_name = 'Partant' where user_id = $1", [stayer]));
+    });
+
+    it("fonctionne aussi pour un compte non inscrit au classement ; refusé sans connexion", async () => {
+        const lone = await createUser(db, "jamais-inscrit@example.com");
+        await addGrade(db, lone, { subjectCode: "R1.02", score: 10, max: 20, coeff: 1 });
+        const before = (await db.query("select count(*)::int as n from auth.users")).rows[0].n;
+        await expect(asRole(db, null, (tx) => tx.query("select public.ranking_delete_account()"))).rejects.toThrow(/permission denied/);
+        await asRole(db, lone, (tx) => tx.query("select public.ranking_delete_account()"));
+        expect((await db.query("select count(*)::int as n from auth.users")).rows[0].n).toBe(before - 1);
+        expect((await db.query("select count(*)::int as n from public.items where user_id = $1", [lone])).rows[0].n).toBe(0);
     });
 });
 
@@ -454,7 +524,7 @@ describe("robustesse", () => {
         expect(t.rows.map((x) => x.relname).sort()).toEqual(["items", "ranking_profiles", "ranking_pulse"]);
         for (const row of t.rows) expect(row.relrowsecurity, row.relname).toBe(true);
         const f = await db.query("select proname, proconfig from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and proname like 'ranking_%'");
-        expect(f.rows).toHaveLength(4);
+        expect(f.rows).toHaveLength(5);
         for (const row of f.rows) expect(row.proconfig, row.proname).toContain('search_path=""');
     });
 

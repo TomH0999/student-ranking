@@ -49,6 +49,10 @@ export const TRACKS = [
     { id: "autre", label: "Autre", name: "Autre projet" }
 ];
 
+/** Classes et groupes TD : listes fermées (mêmes valeurs que la contrainte SQL). */
+export const CLASSES = ["S1", "S2", "S3", "S4", "S5", "S6", "S7"];
+export const TD_GROUPS = ["TD1", "TD2"];
+
 const labelOf = (list, id) => {
     const item = list.find((x) => x.id === id);
     return item ? item.label : null;
@@ -208,7 +212,7 @@ const cleanText = (v) => (typeof v === "string" ? v.trim().replace(/\s+/g, " ") 
 
 /**
  * Valide le formulaire de profil (mêmes règles que la base). Renvoie { ok, value, errors } ;
- * value est prêt à être enregistré (champs vides → null, classe et groupe en majuscules).
+ * value est prêt à être enregistré (champs vides ou valeurs hors liste → null).
  */
 export function validateProfile(input) {
     const errors = {};
@@ -227,10 +231,8 @@ export function validateProfile(input) {
     const studentNumber = cleanText(input.studentNumber).replace(/\s/g, "");
     if (studentNumber && !/^[0-9A-Za-z]{1,20}$/.test(studentNumber)) errors.studentNumber = "N° étudiant invalide (lettres et chiffres, 20 maximum).";
 
-    const className = cleanText(input.className).toUpperCase();
-    const tdGroup = cleanText(input.tdGroup).toUpperCase();
-    if (className.length > 16) errors.className = "Classe trop longue (16 caractères maximum).";
-    if (tdGroup.length > 16) errors.tdGroup = "Groupe trop long (16 caractères maximum).";
+    const className = CLASSES.includes(input.className) ? input.className : null;
+    const tdGroup = TD_GROUPS.includes(input.tdGroup) ? input.tdGroup : null;
 
     const ok = Object.keys(errors).length === 0;
     return {
@@ -244,8 +246,8 @@ export function validateProfile(input) {
                   nameMode,
                   studentNumber: studentNumber || null,
                   origin: knownOrNull(input.origin, ORIGINS),
-                  className: className || null,
-                  tdGroup: tdGroup || null,
+                  className,
+                  tdGroup,
                   track: knownOrNull(input.track, TRACKS),
                   showOrigin: input.showOrigin !== false,
                   showClass: input.showClass !== false,
@@ -274,6 +276,41 @@ export function groupGrades(rows) {
         }
     }
     return ALL_SUBJECTS.filter((s) => bySubject.has(s.code)).map((s) => ({ code: s.code, name: s.name, grades: bySubject.get(s.code) }));
+}
+
+/** Même format que l'export du gestionnaire de scolarité : le fichier peut y être réimporté. */
+export const BACKUP_FORMAT = "gestionnaire-de-notes";
+/** Réglages jamais sauvegardés (lien d'emploi du temps : jeton personnel), comme dans l'application. */
+const PRIVATE_SETTINGS = new Set(["edtUrl"]);
+
+/**
+ * Sauvegarde complète d'un compte avant suppression, à partir des lignes de la table `items`
+ * ({ id, collection, data }) et du profil du classement. Notes, devoirs et réglages sont au
+ * format d'export v2 du gestionnaire (Réglages → Importer) ; le profil est ajouté à part.
+ */
+export function buildBackup(rows, profile, { now = Date.now(), version = "" } = {}) {
+    const collections = { grades: [], homework: [], settings: [] };
+    for (const row of Array.isArray(rows) ? rows : []) {
+        if (!row || typeof row !== "object" || !row.data || typeof row.data !== "object") continue;
+        if (row.collection === "grades" || row.collection === "homework") {
+            collections[row.collection].push({ id: row.id, ...row.data });
+        } else if (row.collection === "settings" && typeof row.data.key === "string" && !PRIVATE_SETTINGS.has(row.data.key)) {
+            collections.settings.push({ key: row.data.key, value: row.data.value ?? null });
+        }
+    }
+    return {
+        format: BACKUP_FORMAT,
+        version: 2,
+        app: `classement-${version}`,
+        exportedAt: new Date(now).toISOString(),
+        collections,
+        conflicts: [],
+        classement: { profil: profile || null }
+    };
+}
+
+export function backupFileName(now = Date.now()) {
+    return `notes_BUT1_sauvegarde_${new Date(now).toISOString().slice(0, 10)}.json`;
 }
 
 /** Nombre affiché comme dans l'application : virgule française, sans zéros inutiles. */

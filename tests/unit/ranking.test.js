@@ -130,16 +130,16 @@ describe("affichage et saisie", () => {
 
 describe("profil, filtres et détail des notes (v1.1)", () => {
     const rows = [
-        { student_key: "a", display_name: "Alice", is_me: true, general_average: 12, origin: "sti2d", class_name: "S1A", td_group: "TD2", track: "racdv", student_number: null, shares_grades: true },
-        { student_key: "b", display_name: "Bob", general_average: 14, origin: "general", class_name: "S1A", td_group: "TD10", track: null, student_number: "22104567", shares_grades: false },
-        { student_key: "c", display_name: "Chloé", general_average: 16, origin: "inconnu", class_name: "S1B", td_group: " ", track: "dacs" },
+        { student_key: "a", display_name: "Alice", is_me: true, general_average: 12, origin: "sti2d", class_name: "S3", td_group: "TD2", track: "racdv", student_number: null, shares_grades: true },
+        { student_key: "b", display_name: "Bob", general_average: 14, origin: "general", class_name: "S3", td_group: "TD10", track: null, student_number: "22104567", shares_grades: false },
+        { student_key: "c", display_name: "Chloé", general_average: 16, origin: "inconnu", class_name: "S5", td_group: " ", track: "dacs" },
         { student_key: "d", display_name: "Ancien site", general_average: 9 }
     ];
 
     it("normalizeSnapshot lit le profil, écarte les valeurs inconnues et reste compatible avec la v1.0", async () => {
         const { normalizeSnapshot: norm } = await import("../../js/ranking.js");
         const s = norm(rows);
-        expect(s[0]).toMatchObject({ origin: "sti2d", className: "S1A", tdGroup: "TD2", track: "racdv", studentNumber: null, sharesGrades: true });
+        expect(s[0]).toMatchObject({ origin: "sti2d", className: "S3", tdGroup: "TD2", track: "racdv", studentNumber: null, sharesGrades: true });
         expect(s[1]).toMatchObject({ studentNumber: "22104567", sharesGrades: false, track: null });
         expect(s[2]).toMatchObject({ origin: null, tdGroup: null, track: "dacs" });
         expect(s[3]).toMatchObject({ origin: null, className: null, tdGroup: null, track: null, studentNumber: null, sharesGrades: false });
@@ -149,7 +149,7 @@ describe("profil, filtres et détail des notes (v1.1)", () => {
         const m = await import("../../js/ranking.js");
         const s = m.normalizeSnapshot(rows);
         const byId = Object.fromEntries(m.FILTERS.map((f) => [f.id, f]));
-        expect(m.filterOptions(s, byId.className)).toEqual([{ value: "S1A", count: 2, label: "S1A" }, { value: "S1B", count: 1, label: "S1B" }]);
+        expect(m.filterOptions(s, byId.className)).toEqual([{ value: "S3", count: 2, label: "S3" }, { value: "S5", count: 1, label: "S5" }]);
         expect(m.filterOptions(s, byId.tdGroup).map((o) => o.value)).toEqual(["TD2", "TD10"]);
         expect(m.filterOptions(s, byId.origin).map((o) => o.label)).toEqual(["Bac général", "STI2D"]);
         expect(m.filterOptions(s, byId.track).map((o) => o.label)).toEqual(["DACS", "RACDV"]);
@@ -160,10 +160,10 @@ describe("profil, filtres et détail des notes (v1.1)", () => {
         const m = await import("../../js/ranking.js");
         const s = m.normalizeSnapshot(rows);
         expect(m.applyFilters(s, {})).toBe(s);
-        expect(m.applyFilters(s, { className: "S1A" }).map((x) => x.name)).toEqual(["Alice", "Bob"]);
-        expect(m.applyFilters(s, { className: "S1A", origin: "sti2d" }).map((x) => x.name)).toEqual(["Alice"]);
-        expect(m.applyFilters(s, { track: "racdv", className: "S1B" })).toEqual([]);
-        const board = m.buildLeaderboard(m.applyFilters(s, { className: "S1A" }), m.GENERAL);
+        expect(m.applyFilters(s, { className: "S3" }).map((x) => x.name)).toEqual(["Alice", "Bob"]);
+        expect(m.applyFilters(s, { className: "S3", origin: "sti2d" }).map((x) => x.name)).toEqual(["Alice"]);
+        expect(m.applyFilters(s, { track: "racdv", className: "S5" })).toEqual([]);
+        const board = m.buildLeaderboard(m.applyFilters(s, { className: "S3" }), m.GENERAL);
         expect(board.rows.map((r) => [r.rank, r.student.name])).toEqual([[1, "Bob"], [2, "Alice"]]);
         expect(board.mine.rank).toBe(2);
     });
@@ -171,14 +171,14 @@ describe("profil, filtres et détail des notes (v1.1)", () => {
     it("sanitizeFilters oublie les valeurs qui n'existent plus", async () => {
         const m = await import("../../js/ranking.js");
         const s = m.normalizeSnapshot(rows);
-        expect(m.sanitizeFilters(s, { className: "S1A", origin: "autre", inconnu: "x", track: "" })).toEqual({ className: "S1A" });
+        expect(m.sanitizeFilters(s, { className: "S3", origin: "autre", inconnu: "x", track: "" })).toEqual({ className: "S3" });
         expect(m.sanitizeFilters(s, null)).toEqual({});
     });
 
     it("profileTags et libellés", async () => {
         const m = await import("../../js/ranking.js");
         const s = m.normalizeSnapshot(rows);
-        expect(m.profileTags(s[0])).toEqual(["S1A", "TD2", "STI2D", "RACDV"]);
+        expect(m.profileTags(s[0])).toEqual(["S3", "TD2", "STI2D", "RACDV"]);
         expect(m.profileTags(s[3])).toEqual([]);
         expect(m.originLabel("autre")).toBe("Autre");
         expect(m.trackLabel("nimporte")).toBeNull();
@@ -186,17 +186,20 @@ describe("profil, filtres et détail des notes (v1.1)", () => {
 
     it("validateProfile : normalise, met les vides à null, applique les règles de la base", async () => {
         const { validateProfile } = await import("../../js/ranking.js");
-        const ok = validateProfile({ displayName: " Tom ", firstName: " Tom ", lastName: "", nameMode: "real", studentNumber: "22 10 45", origin: "sti2d", className: " s1a ", tdGroup: "td2", track: "", showClass: false, showGrades: true });
+        const ok = validateProfile({ displayName: " Tom ", firstName: " Tom ", lastName: "", nameMode: "real", studentNumber: "22 10 45", origin: "sti2d", className: "S3", tdGroup: "TD2", track: "", showClass: false, showGrades: true });
         expect(ok.ok).toBe(true);
         expect(ok.value).toEqual({
-            displayName: "Tom", firstName: "Tom", lastName: null, nameMode: "real", studentNumber: "221045", origin: "sti2d", className: "S1A", tdGroup: "TD2", track: null,
+            displayName: "Tom", firstName: "Tom", lastName: null, nameMode: "real", studentNumber: "221045", origin: "sti2d", className: "S3", tdGroup: "TD2", track: null,
             showOrigin: true, showClass: false, showTdGroup: true, showTrack: true, showStudentNumber: false, showGrades: true
         });
         expect(validateProfile({}).value).toMatchObject({ displayName: null, firstName: null, nameMode: "pseudo", origin: null, showStudentNumber: false, showGrades: false, showOrigin: true });
         expect(validateProfile({ nameMode: "real" }).errors.nameMode).toBeTruthy();
         expect(validateProfile({ displayName: "x" }).errors.displayName).toBeTruthy();
         expect(validateProfile({ studentNumber: "12-34" }).errors.studentNumber).toBeTruthy();
-        expect(validateProfile({ className: "x".repeat(17) }).errors.className).toBeTruthy();
+        // Listes fermées : une valeur hors liste n'est jamais enregistrée
+        expect(validateProfile({ className: "S8", tdGroup: "TD3" }).value).toMatchObject({ className: null, tdGroup: null });
+        expect(validateProfile({ className: "s1", tdGroup: "td1" }).value).toMatchObject({ className: null, tdGroup: null });
+        expect(validateProfile({ className: "S7", tdGroup: "TD1" }).value).toMatchObject({ className: "S7", tdGroup: "TD1" });
         expect(validateProfile({ firstName: "Étudiant" }).errors.firstName).toBeTruthy();
         expect(validateProfile({ origin: "pirate", track: "pirate" }).value).toMatchObject({ origin: null, track: null });
     });
@@ -216,5 +219,42 @@ describe("profil, filtres et détail des notes (v1.1)", () => {
         expect(formatNumber(14.5)).toBe("14,5");
         expect(formatNumber(20)).toBe("20");
         expect(formatNumber(0.25)).toBe("0,25");
+    });
+});
+
+describe("sauvegarde avant suppression du compte (v1.2)", () => {
+    const rows = [
+        { id: "7f8da7d3-7156-45ab-a8ff-3f9c54225ce2", collection: "grades", data: { name: "Partiel", subjectCode: "R1.01", score: 15.5, max: 20, coeff: 2, createdAt: 1790697565329 } },
+        { id: "1feceb4f-66d2-48ac-bdc9-7106b98272ed", collection: "homework", data: { title: "DM de maths", type: "homework", dueDate: "2026-11-20", status: "todo" } },
+        { id: "b278a795-e688-4357-ac31-f8ad1830d9b1", collection: "settings", data: { key: "lastSubject", value: "R1.01" } },
+        { id: "c751f768-ac6a-4d70-8563-932a0ccede42", collection: "settings", data: { key: "edtUrl", value: "https://exemple.invalid/direct/?data=jeton-personnel" } },
+        { id: "x", collection: "inconnue", data: { a: 1 } },
+        { id: "y", collection: "grades", data: null },
+        null
+    ];
+
+    it("format d'export v2 du gestionnaire, profil ajouté à part, lien d'emploi du temps exclu", async () => {
+        const { buildBackup, backupFileName, BACKUP_FORMAT, CLASSES, TD_GROUPS } = await import("../../js/ranking.js");
+        const now = Date.UTC(2026, 10, 10, 14, 30);
+        const backup = buildBackup(rows, { displayName: "Tom", className: "S7" }, { now, version: "1.2.0" });
+        expect(backup).toEqual({
+            format: "gestionnaire-de-notes",
+            version: 2,
+            app: "classement-1.2.0",
+            exportedAt: "2026-11-10T14:30:00.000Z",
+            collections: {
+                grades: [{ id: "7f8da7d3-7156-45ab-a8ff-3f9c54225ce2", name: "Partiel", subjectCode: "R1.01", score: 15.5, max: 20, coeff: 2, createdAt: 1790697565329 }],
+                homework: [{ id: "1feceb4f-66d2-48ac-bdc9-7106b98272ed", title: "DM de maths", type: "homework", dueDate: "2026-11-20", status: "todo" }],
+                settings: [{ key: "lastSubject", value: "R1.01" }]
+            },
+            conflicts: [],
+            classement: { profil: { displayName: "Tom", className: "S7" } }
+        });
+        expect(JSON.stringify(backup)).not.toContain("jeton-personnel");
+        expect(BACKUP_FORMAT).toBe("gestionnaire-de-notes");
+        expect(backupFileName(now)).toBe("notes_BUT1_sauvegarde_2026-11-10.json");
+        expect(buildBackup(null, null).collections).toEqual({ grades: [], homework: [], settings: [] });
+        expect(CLASSES).toEqual(["S1", "S2", "S3", "S4", "S5", "S6", "S7"]);
+        expect(TD_GROUPS).toEqual(["TD1", "TD2"]);
     });
 });

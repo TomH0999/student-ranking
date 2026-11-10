@@ -22,6 +22,9 @@ function mapError(error) {
     if (/failed to fetch|networkerror|load failed|network request failed/i.test(message)) {
         return new RankingError("network", "Connexion impossible. Vérifiez votre accès à Internet.");
     }
+    if (code === "PGRST202" && /ranking_(delete_account|student_grades)/.test(message)) {
+        return new RankingError("not-installed", "Le classement installé sur Supabase est plus ancien que ce site : réexécutez supabase/ranking.sql (voir le README).");
+    }
     if (code === "PGRST202" || code === "PGRST205" || code === "42P01" || code === "42883") {
         return new RankingError("not-installed", "Le classement n'est pas encore installé sur ce projet Supabase (exécutez supabase/ranking.sql, voir le README).");
     }
@@ -155,6 +158,25 @@ export function createApi(config, supabaseLib = globalThis.supabase) {
 
         async leave(userId) {
             await run(client.from("ranking_profiles").delete().eq("user_id", userId));
+        },
+
+        /**
+         * Toutes les données vivantes du compte dans la table de l'application (notes, devoirs,
+         * réglages), lues page par page : la RLS ne renvoie que les lignes de l'utilisateur.
+         */
+        async exportItems() {
+            const PAGE = 1000;
+            const rows = [];
+            for (let from = 0; ; from += PAGE) {
+                const page = await run(client.from("items").select("id,collection,data").is("deleted_at", null).order("id").range(from, from + PAGE - 1));
+                rows.push(...page);
+                if (page.length < PAGE) return rows;
+            }
+        },
+
+        /** Supprime définitivement le compte et toutes ses données (cascade côté base). */
+        async deleteAccount() {
+            await run(client.rpc("ranking_delete_account"));
         },
 
         async snapshot() {

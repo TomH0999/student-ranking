@@ -66,14 +66,22 @@ alter table public.ranking_profiles
     add column if not exists show_grades         boolean not null default false;
 
 alter table public.ranking_profiles drop constraint if exists ranking_profiles_details_check;
+
+-- Classes et groupes TD : listes fermées depuis la v1.2. Une valeur saisie librement en
+-- v1.1 et absente de la liste est effacée (l'étudiant la choisit de nouveau dans son profil).
+update public.ranking_profiles set class_name = null
+    where class_name is not null and class_name not in ('S1', 'S2', 'S3', 'S4', 'S5', 'S6', 'S7');
+update public.ranking_profiles set td_group = null
+    where td_group is not null and td_group not in ('TD1', 'TD2');
+
 alter table public.ranking_profiles add constraint ranking_profiles_details_check check (
     name_mode in ('pseudo', 'real')
     and (first_name is null or (char_length(first_name) between 1 and 30 and first_name = btrim(first_name) and first_name !~ '[[:cntrl:]]' and first_name !~* '^(é|e)tudiant'))
     and (last_name is null or (char_length(last_name) between 1 and 30 and last_name = btrim(last_name) and last_name !~ '[[:cntrl:]]'))
     and (student_number is null or student_number ~ '^[0-9A-Za-z]{1,20}$')
     and (origin is null or origin in ('general', 'sti2d', 'autre'))
-    and (class_name is null or (char_length(class_name) between 1 and 16 and class_name = upper(btrim(class_name)) and class_name !~ '[[:cntrl:]]'))
-    and (td_group is null or (char_length(td_group) between 1 and 16 and td_group = upper(btrim(td_group)) and td_group !~ '[[:cntrl:]]'))
+    and (class_name is null or class_name in ('S1', 'S2', 'S3', 'S4', 'S5', 'S6', 'S7'))
+    and (td_group is null or td_group in ('TD1', 'TD2'))
     and (track is null or track in ('racdv', 'dacs', 'aged', 'iamsi', 'indecis', 'autre'))
 );
 
@@ -446,3 +454,33 @@ comment on function public.ranking_student_grades(text) is 'Classement : détail
 revoke all on function public.ranking_student_grades(text) from public;
 revoke all on function public.ranking_student_grades(text) from anon;
 grant execute on function public.ranking_student_grades(text) to authenticated;
+
+-- -----------------------------------------------------------------------------
+-- 5. Suppression de son compte (v1.2)
+--
+-- Supprime le compte de l'appelant et, par cascade, TOUTES ses données : notes, devoirs
+-- et réglages du gestionnaire de scolarité (table items), profil du classement, sessions.
+-- Irréversible. Le site télécharge une sauvegarde JSON avant d'appeler cette fonction.
+-- Personne ne peut supprimer un autre compte que le sien.
+-- -----------------------------------------------------------------------------
+create or replace function public.ranking_delete_account()
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+    caller uuid := (select auth.uid());
+begin
+    if caller is null then
+        raise exception 'Connexion requise.' using errcode = '42501';
+    end if;
+    delete from auth.users where id = caller;
+end;
+$$;
+
+comment on function public.ranking_delete_account() is 'Classement : supprime le compte de l''appelant et toutes ses données (cascade). Irréversible.';
+
+revoke all on function public.ranking_delete_account() from public;
+revoke all on function public.ranking_delete_account() from anon;
+grant execute on function public.ranking_delete_account() to authenticated;

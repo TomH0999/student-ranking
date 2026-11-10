@@ -9,7 +9,7 @@ import { RANKING_VERSION } from "./version.js";
 import { createApi } from "./api.js";
 import { h, replace } from "./dom.js";
 import {
-    KINDS, GENERAL, CATEGORIES, ORIGINS, TRACKS, FILTERS, categoryById, categoriesOfKind, normalizeSnapshot,
+    KINDS, GENERAL, CATEGORIES, ORIGINS, TRACKS, CLASSES, TD_GROUPS, FILTERS, buildBackup, backupFileName, categoryById, categoriesOfKind, normalizeSnapshot,
     buildLeaderboard, mySummary, filterOptions, sanitizeFilters, applyFilters, profileTags, originLabel, trackLabel,
     groupGrades, formatAverage, formatNumber, ordinal, validateDisplayName, validateProfile
 } from "./ranking.js";
@@ -138,7 +138,7 @@ function renderLoading(message = "Chargement…") {
     replace(root, h("p", { class: "loading", role: "status" }, message));
 }
 
-function renderSignIn() {
+function renderSignIn(notice = null) {
     const error = errorBox();
     const submit = h("button", { class: "btn primary", type: "submit" }, "Se connecter");
     const form = h(
@@ -167,6 +167,7 @@ function renderSignIn() {
     );
     replace(
         root,
+        notice ? h("p", { class: "banner ok", role: "status" }, notice) : null,
         card(
             h("h2", null, "Connexion"),
             h("p", null, "Connectez-vous avec le compte de votre gestionnaire de scolarité : le classement utilise les notes que vous y avez saisies."),
@@ -631,14 +632,12 @@ function buildAccount() {
             h(
                 "div",
                 { class: "grid" },
-                field("class-name", "Classe", { name: "className", type: "text", maxlength: 16, list: "known-classes", autocapitalize: "characters", value: p.className || "", placeholder: "ex. S1A" }),
-                field("td-group", "Groupe TD", { name: "tdGroup", type: "text", maxlength: 16, list: "known-groups", autocapitalize: "characters", value: p.tdGroup || "", placeholder: "ex. TD2" }),
+                selectField("class-name", "Classe", "className", CLASSES.map((c) => ({ id: c, label: c })), p.className),
+                selectField("td-group", "Groupe TD", "tdGroup", TD_GROUPS.map((g) => ({ id: g, label: g })), p.tdGroup),
                 selectField("origin", "Provenance", "origin", ORIGINS, p.origin),
                 selectField("track", "Parcours visé en 2e année", "track", TRACKS, p.track),
                 field("student-number", "N° étudiant", { name: "studentNumber", type: "text", maxlength: 20, inputmode: "numeric", autocomplete: "off", value: p.studentNumber || "" })
-            ),
-            h("datalist", { id: "known-classes" }),
-            h("datalist", { id: "known-groups" })
+            )
         ),
         h(
             "fieldset",
@@ -689,21 +688,126 @@ function buildAccount() {
             ),
             h("button", { class: "btn", type: "button", onclick: signOut }, "Se déconnecter")
         ),
-        h("p", { class: "hint" }, "Se déconnecter ici déconnecte aussi le gestionnaire de scolarité sur cet appareil lorsqu'ils sont hébergés sur le même site.")
+        h("p", { class: "hint" }, "Se déconnecter ici déconnecte aussi le gestionnaire de scolarité sur cet appareil lorsqu'ils sont hébergés sur le même site."),
+        h(
+            "div",
+            { class: "danger-zone" },
+            h("div", null, h("strong", null, "Supprimer mon compte"), h("p", { class: "hint" }, "Efface définitivement de la base votre compte et toutes ses données : notes, devoirs, réglages et profil. Une sauvegarde JSON est téléchargée avant.")),
+            h("button", { class: "btn danger", type: "button", onclick: openDeleteAccount }, "Supprimer mon compte…")
+        )
     );
     if (accountEl && accountEl.parentNode) accountEl.replaceWith(next);
     accountEl = next;
-    fillSuggestions();
 }
 
-/** Classes et groupes déjà utilisés par d'autres : proposés à la saisie pour éviter les variantes. */
-function fillSuggestions() {
-    if (!accountEl) return;
-    for (const [id, key] of [["known-classes", "className"], ["known-groups", "tdGroup"]]) {
-        const list = accountEl.querySelector(`#${id}`);
-        const values = [...new Set(state.students.map((s) => s[key]).filter(Boolean))].sort();
-        replace(list, values.map((value) => h("option", { value })));
+// ---------------------------------------------------------------------------
+// Suppression du compte : sauvegarde JSON automatique, puis confirmation
+// ---------------------------------------------------------------------------
+const DELETE_WORD = "SUPPRIMER";
+const deleteDialog = h("dialog", { class: "sheet", "aria-labelledby": "delete-title" });
+document.body.append(deleteDialog);
+const removal = { seq: 0, backup: null, url: null, error: null, busy: false };
+
+deleteDialog.addEventListener("close", () => {
+    removal.seq++;
+    if (removal.url) URL.revokeObjectURL(removal.url);
+    removal.url = null;
+    removal.backup = null;
+});
+
+function downloadBackup() {
+    const a = h("a", { href: removal.url, download: removal.backup.fileName, hidden: true });
+    document.body.append(a);
+    a.click();
+    a.remove();
+}
+
+async function openDeleteAccount() {
+    const seq = ++removal.seq;
+    Object.assign(removal, { backup: null, url: null, error: null, busy: false });
+    renderDeleteDialog();
+    if (!deleteDialog.open) deleteDialog.showModal();
+    try {
+        const [rows, profile] = await Promise.all([api.exportItems(), api.fetchProfile(state.session.userId)]);
+        if (seq !== removal.seq) return;
+        const now = Date.now();
+        const data = buildBackup(rows, profile, { now, version: RANKING_VERSION });
+        removal.backup = { fileName: backupFileName(now), counts: { grades: data.collections.grades.length, homework: data.collections.homework.length, settings: data.collections.settings.length } };
+        removal.url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }));
+        downloadBackup();
+    } catch (e) {
+        if (seq !== removal.seq) return;
+        removal.error = e.message;
     }
+    renderDeleteDialog();
+}
+
+function renderDeleteDialog() {
+    const error = errorBox();
+    const input = h("input", { id: "delete-confirm", type: "text", autocomplete: "off", autocapitalize: "characters", spellcheck: "false", disabled: !removal.backup });
+    const confirm = h("button", { class: "btn danger solid", type: "submit", disabled: true }, "Supprimer définitivement");
+    input.addEventListener("input", () => {
+        confirm.disabled = !removal.backup || removal.busy || input.value.trim().toUpperCase() !== DELETE_WORD;
+    });
+    const plural = (n, word) => `${n} ${word}${n > 1 ? "s" : ""}`;
+    let backupBlock;
+    if (removal.error) {
+        backupBlock = h("div", { class: "backup failed", role: "alert" }, h("p", null, `Sauvegarde impossible : ${removal.error}`), h("p", { class: "hint" }, "Sans sauvegarde, la suppression reste bloquée."), h("button", { class: "btn", type: "button", onclick: openDeleteAccount }, "Réessayer"));
+    } else if (!removal.backup) {
+        backupBlock = h("div", { class: "backup", role: "status" }, h("p", null, "Préparation de votre sauvegarde…"));
+    } else {
+        const c = removal.backup.counts;
+        backupBlock = h(
+            "div",
+            { class: "backup done", role: "status" },
+            h("p", null, h("strong", null, "Sauvegarde téléchargée : "), removal.backup.fileName),
+            h("p", { class: "hint" }, `${plural(c.grades, "note")}, ${plural(c.homework, "devoir")}, ${plural(c.settings, "réglage")} et votre profil. Ce fichier peut être réimporté dans le gestionnaire (Réglages → Importer).`),
+            h("button", { class: "btn", type: "button", onclick: downloadBackup }, "Télécharger à nouveau")
+        );
+    }
+    const form = h(
+        "form",
+        {
+            class: "form",
+            novalidate: true,
+            onsubmit: async (event) => {
+                event.preventDefault();
+                if (confirm.disabled) return;
+                removal.busy = true;
+                confirm.disabled = true;
+                confirm.textContent = "Suppression…";
+                try {
+                    await api.deleteAccount();
+                } catch (e) {
+                    removal.busy = false;
+                    confirm.textContent = "Supprimer définitivement";
+                    confirm.disabled = false;
+                    return showError(error, e.message);
+                }
+                deleteDialog.close();
+                await api.signOut();
+                signedOut("Votre compte et toutes ses données ont été supprimés de la base.");
+            }
+        },
+        h("label", { class: "field", for: "delete-confirm" }, h("span", null, `Pour confirmer, écrivez ${DELETE_WORD}`), input),
+        error,
+        h("div", { class: "actions" }, confirm, h("button", { class: "btn", type: "button", onclick: () => deleteDialog.close() }, "Annuler"))
+    );
+    replace(
+        deleteDialog,
+        h("div", { class: "sheet-head" }, h("h2", { id: "delete-title" }, "Supprimer mon compte")),
+        h("p", null, "Cette action est définitive. Seront effacés de la base :"),
+        h(
+            "ul",
+            { class: "bullets" },
+            h("li", null, "votre compte : vous ne pourrez plus vous connecter, ni ici ni dans le gestionnaire de scolarité ;"),
+            h("li", null, "toutes vos notes, devoirs et réglages synchronisés ;"),
+            h("li", null, "votre profil et votre place dans le classement.")
+        ),
+        h("p", { class: "hint" }, "Les données enregistrées sur vos appareils par le gestionnaire de scolarité ne sont pas effacées : il repasse simplement en mode local."),
+        backupBlock,
+        form
+    );
 }
 
 let pendingRender = false;
@@ -752,7 +856,6 @@ function renderBoard(force = false) {
         while (root.firstChild !== accountEl) root.firstChild.remove();
         accountEl.before(...main);
     }
-    fillSuggestions();
     if (focusId) {
         const target = root.querySelector(`[data-fid="${CSS.escape(focusId)}"]`);
         if (target) target.focus({ preventScroll: true });
@@ -816,6 +919,7 @@ function stopBoard() {
     accountEl = null;
     pendingRender = false;
     if (dialog.open) dialog.close();
+    if (deleteDialog.open) deleteDialog.close();
 }
 
 async function enter(session) {
@@ -835,11 +939,11 @@ async function enter(session) {
     else renderJoin();
 }
 
-function signedOut() {
+function signedOut(notice = null) {
     stopBoard();
     state.session = null;
     state.profile = null;
-    renderSignIn();
+    renderSignIn(notice);
 }
 
 async function signOut() {

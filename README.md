@@ -104,7 +104,7 @@ En bas de page. Tout est facultatif et modifiable à tout moment.
 | Rubrique | Contenu |
 |---|---|
 | **Identité** | Pseudo, prénom, nom, et le nom affiché dans le classement : pseudo **ou** prénom et nom |
-| **Scolarité** | Classe, groupe TD (les valeurs déjà saisies par d'autres sont proposées), provenance (bac général, STI2D, autre), parcours visé en 2e année (RACDV, DACS, AGED, IAMSI, indécis, autre), n° étudiant |
+| **Scolarité** | Classe (S1 à S7) et groupe TD (TD1, TD2) à choisir dans une liste, provenance (bac général, STI2D, autre), parcours visé en 2e année (RACDV, DACS, AGED, IAMSI, indécis, autre), n° étudiant |
 | **Ce que les autres voient** | Une case par information. Par défaut : classe, groupe, provenance et parcours affichés ; n° étudiant et détail des notes masqués |
 
 - Une information masquée n'est pas transmise aux autres et ne sert pas aux filtres.
@@ -112,7 +112,23 @@ En bas de page. Tout est facultatif et modifiable à tout moment.
   évaluations (nom, note, barème, coefficient) dans votre fiche. Sinon, ils ne voient que vos moyennes.
 - Votre fiche (clic sur votre ligne) montre ce que les autres voient de vous.
 
-Au même endroit : **quitter le classement** (vos moyennes et votre profil disparaissent pour les
+### Supprimer mon compte
+
+Tout en bas de « Mon profil », bouton **Supprimer mon compte…**.
+
+1. Une **sauvegarde JSON** de vos données est téléchargée automatiquement (notes, devoirs, réglages
+   et profil). Elle est au format du gestionnaire de scolarité : *Réglages → Importer* la recharge.
+   Le lien personnel d'emploi du temps n'y figure pas, comme dans les exports du gestionnaire.
+2. Écrivez `SUPPRIMER` puis validez. Sans sauvegarde réussie, la suppression reste bloquée.
+
+Sont alors effacés de la base, définitivement : le compte (plus de connexion possible, ni ici ni dans
+le gestionnaire), toutes les notes, devoirs et réglages synchronisés, le profil et la place dans le
+classement. Les données enregistrées sur vos appareils par le gestionnaire ne sont pas effacées : il
+repasse en mode local. Pour revenir, il suffit de recréer un compte.
+
+### Quitter ou se déconnecter
+
+Dans « Mon profil » : **quitter le classement** (vos moyennes et votre profil disparaissent pour les
 autres, vos notes ne sont pas touchées) et **se déconnecter** (déconnecte aussi le gestionnaire sur
 cet appareil, les deux sites partageant la même session).
 

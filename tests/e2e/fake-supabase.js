@@ -17,6 +17,10 @@
         users: init.users || {}, // email → { id, password }
         profiles: new Map(Object.entries(init.profiles || {}).map(([id, v]) => [id, toRow(v)])),
         students: init.students || [], // { owner, general, ues, subjects, grades? }
+        items: init.items || [], // lignes de la table items : { user_id, id, collection, data, deleted_at? }
+        deleted: [], // comptes supprimés
+        failExport: false,
+        failDelete: false,
         installed: init.installed !== false,
         failSnapshot: false,
         channelStatus: null,
@@ -57,8 +61,8 @@
             }
         }
         const bad =
-            (row.class_name && row.class_name !== row.class_name.toUpperCase()) ||
-            (row.td_group && row.td_group !== row.td_group.toUpperCase()) ||
+            (row.class_name && !["S1", "S2", "S3", "S4", "S5", "S6", "S7"].includes(row.class_name)) ||
+            (row.td_group && !["TD1", "TD2"].includes(row.td_group)) ||
             (row.student_number && !/^[0-9A-Za-z]{1,20}$/.test(row.student_number)) ||
             (row.origin && !["general", "sti2d", "autre"].includes(row.origin)) ||
             (row.track && !["racdv", "dacs", "aged", "iamsi", "indecis", "autre"].includes(row.track));
@@ -101,6 +105,36 @@
                 }
             })
         };
+    }
+
+    // Table items de l'application : la RLS ne renvoie que les lignes de l'utilisateur connecté
+    function items() {
+        let rows = fake.items.filter((r) => r.user_id === uid());
+        const chain = {
+            select: () => chain,
+            is: (column, value) => {
+                rows = rows.filter((r) => (r[column] ?? null) === value);
+                return chain;
+            },
+            order: () => chain,
+            range: (from, to) => {
+                if (fake.failExport) return Promise.reject(new TypeError("Failed to fetch"));
+                return ok(rows.slice(from, to + 1).map(({ id, collection, data }) => ({ id, collection, data })));
+            }
+        };
+        return chain;
+    }
+
+    function deleteAccount() {
+        const me = uid();
+        if (!me) return fail({ code: "42501", message: "Connexion requise." });
+        if (fake.failDelete) return fail({ code: "PGRST202", message: "Could not find the function public.ranking_delete_account without parameters in the schema cache" });
+        fake.deleted.push(me);
+        fake.profiles.delete(me);
+        fake.items = fake.items.filter((r) => r.user_id !== me);
+        fake.students = fake.students.filter((s) => s.owner !== me);
+        for (const [email, user] of Object.entries(fake.users)) if (user.id === me) delete fake.users[email];
+        return ok(null);
     }
 
     const keyOf = (owner) => `k-${owner}`;
@@ -167,8 +201,8 @@
                         return ok(null);
                     }
                 },
-                from: () => profiles(),
-                rpc: (name, args) => (name === "ranking_student_grades" ? grades(args || {}) : snapshot()),
+                from: (table) => (table === "items" ? items() : profiles()),
+                rpc: (name, args) => (name === "ranking_student_grades" ? grades(args || {}) : name === "ranking_delete_account" ? deleteAccount() : snapshot()),
                 channel() {
                     const ch = {
                         on(_type, _filter, listener) {

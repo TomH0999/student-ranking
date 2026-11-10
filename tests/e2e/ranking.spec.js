@@ -253,10 +253,10 @@ test("déjà inscrit depuis un autre appareil : rejoindre met simplement le pseu
 // v1.1 : profil personnalisable, filtres, fiche d'un étudiant
 // ---------------------------------------------------------------------------
 const RICH_PROFILES = {
-    tom: { display_name: "Tom", origin: "sti2d", class_name: "S1A", td_group: "TD2", track: "racdv" },
-    lea: { display_name: "Léa", origin: "general", class_name: "S1A", td_group: "TD1", track: "dacs", show_grades: true, student_number: "22104567", show_student_number: true },
+    tom: { display_name: "Tom", origin: "sti2d", class_name: "S3", td_group: "TD2", track: "racdv" },
+    lea: { display_name: "Léa", origin: "general", class_name: "S3", td_group: "TD1", track: "dacs", show_grades: true, student_number: "22104567", show_student_number: true },
     max: null,
-    zoe: { display_name: "Zoé", origin: "general", class_name: "S1B", td_group: "TD3", show_origin: false }
+    zoe: { display_name: "Zoé", origin: "general", class_name: "S5", td_group: "TD1", show_origin: false }
 };
 const RICH_STUDENTS = STUDENTS.map((s) =>
     s.owner === "lea"
@@ -277,8 +277,8 @@ test("un profil non renseigné s'affiche exactement comme avant (aucune étiquet
 test("les informations de profil affichées apparaissent sous le nom", async ({ page }) => {
     await open(page, rich);
     await expect(rows(page)).toHaveCount(4);
-    await expect(rows(page).nth(1).locator(".tags")).toHaveText("S1A · TD1 · Bac général · DACS");
-    await expect(rows(page).nth(0).locator(".tags")).toHaveText("S1B · TD3"); // provenance masquée
+    await expect(rows(page).nth(1).locator(".tags")).toHaveText("S3 · TD1 · Bac général · DACS");
+    await expect(rows(page).nth(0).locator(".tags")).toHaveText("S5 · TD1"); // provenance masquée
     await expect(rows(page).nth(3).locator(".tags")).toHaveCount(0);
 });
 
@@ -286,7 +286,7 @@ test("filtrer par classe et par provenance : rangs recalculés dans la sélectio
     await open(page, rich);
     await expect(page.getByTestId("my-rank")).toHaveText("3e / 4");
 
-    await page.locator("#filter-className").selectOption("S1A");
+    await page.locator("#filter-className").selectOption("S3");
     expect((await rowTexts(page)).map((t) => t.split(" ").slice(0, 2).join(" "))).toEqual(["1 Léa", "2 Tom"]);
     await expect(page.getByTestId("my-rank")).toHaveText("2e / 2");
     await expect(page.getByTestId("count")).toContainText("2 étudiants classés dans la sélection");
@@ -309,7 +309,7 @@ test("filtrer par classe et par provenance : rangs recalculés dans la sélectio
 
 test("un filtre dont la valeur disparaît est abandonné tout seul", async ({ page }) => {
     await open(page, rich);
-    await page.locator("#filter-className").selectOption("S1B");
+    await page.locator("#filter-className").selectOption("S5");
     await expect(rows(page)).toHaveCount(1);
     await page.locator("#filter-className").blur();
     await page.evaluate(() => {
@@ -326,8 +326,10 @@ test("compléter son profil et choisir ce qui est affiché", async ({ page }) =>
     await page.locator("#first-name").fill("Tom");
     await page.locator("#last-name").fill("Durand");
     await page.getByLabel("Mon prénom et mon nom").check();
-    await page.locator("#class-name").fill("s1a");
-    await page.locator("#td-group").fill("td2");
+    await expect(page.locator("#class-name option")).toHaveText(["Non renseigné", "S1", "S2", "S3", "S4", "S5", "S6", "S7"]);
+    await expect(page.locator("#td-group option")).toHaveText(["Non renseigné", "TD1", "TD2"]);
+    await page.locator("#class-name").selectOption("S3");
+    await page.locator("#td-group").selectOption("TD2");
     await page.locator("#origin").selectOption("sti2d");
     await page.locator("#track").selectOption("racdv");
     await page.locator("#student-number").fill("22 10 45 67");
@@ -337,14 +339,14 @@ test("compléter son profil et choisir ce qui est affiché", async ({ page }) =>
 
     await expect(page.getByText("Profil enregistré")).toBeVisible();
     await expect(page.locator(".row.me")).toContainText("Tom Durand");
-    await expect(page.locator(".row.me .tags")).toHaveText("S1A · STI2D · RACDV");
+    await expect(page.locator(".row.me .tags")).toHaveText("S3 · STI2D · RACDV");
     const saved = await page.evaluate(() => window.__fake.profiles.get("tom"));
     expect(saved).toMatchObject({
-        first_name: "Tom", last_name: "Durand", name_mode: "real", class_name: "S1A", td_group: "TD2", origin: "sti2d", track: "racdv",
+        first_name: "Tom", last_name: "Durand", name_mode: "real", class_name: "S3", td_group: "TD2", origin: "sti2d", track: "racdv",
         student_number: "22104567", show_td_group: false, show_student_number: false, show_grades: true, show_class: true
     });
     // Le formulaire reste ouvert et reflète ce qui est enregistré
-    await expect(page.locator("#class-name")).toHaveValue("S1A");
+    await expect(page.locator("#class-name")).toHaveValue("S3");
     await expect(page.locator("input[name=showTdGroup]")).not.toBeChecked();
 
     // Erreur de saisie : rien n'est envoyé
@@ -379,9 +381,9 @@ test("une mise à jour en direct ne touche ni au profil en cours de saisie ni au
 test("fiche d'un étudiant : profil affiché, moyennes et rangs, détail des notes s'il est partagé", async ({ page }) => {
     await open(page, rich);
     await rows(page).nth(1).click();
-    const sheet = page.locator("dialog.sheet");
+    const sheet = page.locator("dialog[aria-labelledby=sheet-title]");
     await expect(sheet.getByRole("heading", { name: "Léa" })).toBeVisible();
-    await expect(sheet.locator(".facts")).toContainText("ClasseS1A");
+    await expect(sheet.locator(".facts")).toContainText("ClasseS3");
     await expect(sheet.locator(".facts")).toContainText("N° étudiant22104567");
     await expect(sheet.locator(".summary.static li")).toHaveCount(3);
     await expect(sheet.locator(".summary.static li").first()).toContainText("2e / 4");
@@ -408,7 +410,7 @@ test("fiche d'un étudiant : profil affiché, moyennes et rangs, détail des not
 test("fiche : sans partage, aucune note n'est demandée ; ma propre fiche montre mes notes à moi seul", async ({ page }) => {
     await open(page, rich);
     await rows(page).nth(0).click();
-    const sheet = page.locator("dialog.sheet");
+    const sheet = page.locator("dialog[aria-labelledby=sheet-title]");
     await expect(sheet.getByText("Cet étudiant ne partage pas le détail de ses notes.")).toBeVisible();
     await expect(sheet.locator(".facts")).not.toContainText("Provenance");
     expect(await page.evaluate(() => window.__fake.calls.grades)).toBe(0);
@@ -427,13 +429,135 @@ test("nouveautés : pas de défilement horizontal, aucune erreur ni violation CS
     });
     page.on("pageerror", (e) => problems.push(String(e)));
     await open(page, rich);
-    await page.locator("#filter-className").selectOption("S1A");
+    await page.locator("#filter-className").selectOption("S3");
     await page.getByText("Mon profil", { exact: true }).click();
     const overflow = () => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     expect(await overflow()).toBeLessThanOrEqual(0);
     await rows(page).nth(0).click();
-    await expect(page.locator("dialog.sheet")).toBeVisible();
-    const sheetOverflow = await page.locator("dialog.sheet").evaluate((d) => d.scrollWidth - d.clientWidth);
+    await expect(page.locator("dialog[aria-labelledby=sheet-title]")).toBeVisible();
+    const sheetOverflow = await page.locator("dialog[aria-labelledby=sheet-title]").evaluate((d) => d.scrollWidth - d.clientWidth);
     expect(sheetOverflow).toBeLessThanOrEqual(0);
     expect(problems).toEqual([]);
+});
+
+// ---------------------------------------------------------------------------
+// v1.2 : suppression du compte avec sauvegarde JSON automatique
+// ---------------------------------------------------------------------------
+import { readFileSync } from "node:fs";
+
+const TOM_ITEMS = [
+    { user_id: "tom", id: "7f8da7d3-7156-45ab-a8ff-3f9c54225ce2", collection: "grades", data: { name: "Partiel", subjectCode: "R1.01", score: 15.5, max: 20, coeff: 2, createdAt: 2 } },
+    { user_id: "tom", id: "1feceb4f-66d2-48ac-bdc9-7106b98272ed", collection: "grades", data: { name: "Soutenance", subjectCode: "SAE 1.01", score: 12, max: 20, coeff: 1, createdAt: 3 } },
+    { user_id: "tom", id: "9c62d660-f3d5-4b4e-a7ca-d2b8fed63d8c", collection: "grades", data: { name: "Supprimée", subjectCode: "R1.02", score: 1, max: 20, coeff: 1 }, deleted_at: "2026-11-01T00:00:00Z" },
+    { user_id: "tom", id: "b278a795-e688-4357-ac31-f8ad1830d9b1", collection: "homework", data: { title: "DM de maths", dueDate: "2026-11-20" } },
+    { user_id: "tom", id: "c751f768-ac6a-4d70-8563-932a0ccede42", collection: "settings", data: { key: "edtUrl", value: "https://exemple.invalid/?data=jeton-personnel" } },
+    { user_id: "tom", id: "75437c06-238b-4c9c-871d-0152b5046592", collection: "settings", data: { key: "lastSubject", value: "R1.01" } },
+    { user_id: "lea", id: "72efeb5a-197d-4162-89aa-34d9f70d2d91", collection: "grades", data: { name: "Note de Léa", subjectCode: "R1.01", score: 19, max: 20, coeff: 1 } }
+];
+const withItems = { session: asTom, profiles: RICH_PROFILES, students: RICH_STUDENTS, items: TOM_ITEMS, users: USERS };
+
+async function openDelete(page) {
+    await page.getByText("Mon profil", { exact: true }).click();
+    const download = page.waitForEvent("download");
+    await page.getByRole("button", { name: "Supprimer mon compte…" }).click();
+    return download;
+}
+
+test("supprimer son compte : sauvegarde JSON téléchargée automatiquement, puis suppression après confirmation", async ({ page }) => {
+    await open(page, withItems);
+    const download = await openDelete(page);
+    const dialog = page.locator("dialog[aria-labelledby=delete-title]");
+    await expect(dialog.getByText("Sauvegarde téléchargée")).toBeVisible();
+    await expect(dialog).toContainText("2 notes, 1 devoir, 1 réglage et votre profil");
+
+    // Le fichier : uniquement mes données vivantes, au format du gestionnaire, sans le lien d'emploi du temps
+    expect(download.suggestedFilename()).toMatch(/^notes_BUT1_sauvegarde_\d{4}-\d{2}-\d{2}\.json$/);
+    const backup = JSON.parse(readFileSync(await download.path(), "utf8"));
+    expect(backup.format).toBe("gestionnaire-de-notes");
+    expect(backup.version).toBe(2);
+    expect(backup.collections.grades.map((g) => g.name)).toEqual(["Partiel", "Soutenance"]);
+    expect(backup.collections.grades[0]).toEqual({ id: "7f8da7d3-7156-45ab-a8ff-3f9c54225ce2", name: "Partiel", subjectCode: "R1.01", score: 15.5, max: 20, coeff: 2, createdAt: 2 });
+    expect(backup.collections.homework).toEqual([{ id: "b278a795-e688-4357-ac31-f8ad1830d9b1", title: "DM de maths", dueDate: "2026-11-20" }]);
+    expect(backup.collections.settings).toEqual([{ key: "lastSubject", value: "R1.01" }]);
+    expect(backup.classement.profil).toMatchObject({ displayName: "Tom", className: "S3", tdGroup: "TD2", origin: "sti2d", track: "racdv" });
+    const text = JSON.stringify(backup);
+    expect(text).not.toContain("jeton-personnel");
+    expect(text).not.toContain("Note de Léa");
+    expect(text).not.toContain("Supprimée");
+
+    // Rien n'est supprimé tant que le mot n'est pas écrit
+    const confirm = dialog.getByRole("button", { name: "Supprimer définitivement" });
+    await expect(confirm).toBeDisabled();
+    await dialog.getByLabel("Pour confirmer, écrivez SUPPRIMER").fill("supprime");
+    await expect(confirm).toBeDisabled();
+    expect(await page.evaluate(() => window.__fake.deleted)).toEqual([]);
+    await dialog.getByLabel("Pour confirmer, écrivez SUPPRIMER").fill("supprimer");
+    await confirm.click();
+
+    await expect(page.getByText("Votre compte et toutes ses données ont été supprimés de la base.")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Connexion" })).toBeVisible();
+    const after = await page.evaluate(() => ({
+        deleted: window.__fake.deleted,
+        mine: window.__fake.items.filter((r) => r.user_id === "tom").length,
+        others: window.__fake.items.filter((r) => r.user_id === "lea").length,
+        profile: window.__fake.profiles.has("tom"),
+        session: localStorage.getItem("gdn-supabase-auth")
+    }));
+    expect(after).toEqual({ deleted: ["tom"], mine: 0, others: 1, profile: false, session: null });
+
+    // Le compte n'existe plus
+    await page.getByLabel("Adresse e-mail").fill("tom@example.com");
+    await page.getByLabel("Mot de passe").fill("secret-tom");
+    await page.getByRole("button", { name: "Se connecter" }).click();
+    await expect(page.getByRole("alert")).toHaveText("Adresse e-mail ou mot de passe incorrect.");
+});
+
+test("suppression : annuler ne supprime rien ; « Télécharger à nouveau » redonne le fichier", async ({ page }) => {
+    await open(page, withItems);
+    await openDelete(page);
+    const dialog = page.locator("dialog[aria-labelledby=delete-title]");
+    const again = page.waitForEvent("download");
+    await dialog.getByRole("button", { name: "Télécharger à nouveau" }).click();
+    expect((await again).suggestedFilename()).toMatch(/^notes_BUT1_sauvegarde_/);
+    await dialog.getByRole("button", { name: "Annuler" }).click();
+    await expect(dialog).toBeHidden();
+    expect(await page.evaluate(() => ({ deleted: window.__fake.deleted, items: window.__fake.items.length, profile: window.__fake.profiles.has("tom") }))).toEqual({ deleted: [], items: 7, profile: true });
+    await expect(rows(page)).toHaveCount(4);
+});
+
+test("suppression bloquée si la sauvegarde échoue, puis possible après un nouvel essai", async ({ page }) => {
+    await open(page, withItems);
+    await page.evaluate(() => {
+        window.__fake.failExport = true;
+    });
+    await page.getByText("Mon profil", { exact: true }).click();
+    await page.getByRole("button", { name: "Supprimer mon compte…" }).click();
+    const dialog = page.locator("dialog[aria-labelledby=delete-title]");
+    await expect(dialog.getByText(/Sauvegarde impossible/)).toBeVisible();
+    await expect(dialog.getByLabel("Pour confirmer, écrivez SUPPRIMER")).toBeDisabled();
+    await expect(dialog.getByRole("button", { name: "Supprimer définitivement" })).toBeDisabled();
+    expect(await page.evaluate(() => window.__fake.deleted)).toEqual([]);
+
+    await page.evaluate(() => {
+        window.__fake.failExport = false;
+    });
+    const download = page.waitForEvent("download");
+    await dialog.getByRole("button", { name: "Réessayer" }).click();
+    await download;
+    await expect(dialog.getByText("Sauvegarde téléchargée")).toBeVisible();
+    await expect(dialog.getByLabel("Pour confirmer, écrivez SUPPRIMER")).toBeEnabled();
+});
+
+test("suppression : si la base refuse, le compte reste intact et l'erreur est affichée", async ({ page }) => {
+    await open(page, withItems);
+    await page.evaluate(() => {
+        window.__fake.failDelete = true;
+    });
+    await openDelete(page);
+    const dialog = page.locator("dialog[aria-labelledby=delete-title]");
+    await dialog.getByLabel("Pour confirmer, écrivez SUPPRIMER").fill("SUPPRIMER");
+    await dialog.getByRole("button", { name: "Supprimer définitivement" }).click();
+    await expect(dialog.getByRole("alert")).toContainText("plus ancien que ce site");
+    await expect(dialog).toBeVisible();
+    expect(await page.evaluate(() => ({ items: window.__fake.items.length, profile: window.__fake.profiles.has("tom"), session: !!localStorage.getItem("gdn-supabase-auth") }))).toEqual({ items: 7, profile: true, session: true });
 });
