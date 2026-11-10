@@ -235,13 +235,13 @@ function remember(key, value) {
 function selectCategory(category) {
     state.category = category;
     remember(CATEGORY_KEY, category.id);
-    renderBoard(true);
+    renderBoard();
 }
 
 function setFilter(id, value) {
     state.filters = { ...state.filters, [id]: value || undefined };
     remember(FILTERS_KEY, JSON.stringify(state.filters));
-    renderBoard(true);
+    renderBoard();
 }
 
 function kindTabs() {
@@ -289,57 +289,64 @@ function categoryChips(students) {
     );
 }
 
-/** Filtres par classe, groupe, provenance, parcours : seuls ceux qui ont des valeurs sont proposés. */
-function filterBar() {
-    const controls = [];
-    for (const filter of FILTERS) {
-        const options = filterOptions(state.students, filter);
-        if (options.length === 0) continue;
+/**
+ * Filtres par classe, groupe, provenance, parcours. La barre est construite une seule fois et
+ * reste en place pendant les mises à jour en direct : une liste ouverte ou sélectionnée n'est
+ * jamais remplacée, et le classement continue de se rafraîchir autour d'elle.
+ */
+let filterEl = null;
+const filterControls = new Map(); // id du filtre → { label, select, signature }
+
+function buildFilterBar() {
+    filterControls.clear();
+    const controls = FILTERS.map((filter) => {
         const id = `filter-${filter.id}`;
-        controls.push(
-            h(
-                "label",
-                { class: "filter", for: id },
-                h("span", null, filter.label),
-                h(
-                    "select",
-                    {
-                        id,
-                        dataset: { fid: id },
-                        onchange: (event) => setFilter(filter.id, event.target.value),
-                        onblur: () => {
-                            if (pendingRender) renderBoard(true);
-                        }
-                    },
-                    h("option", { value: "" }, filter.all),
-                    options.map((o) => h("option", { value: o.value, selected: state.filters[filter.id] === o.value }, `${o.label} (${o.count})`))
-                )
-            )
-        );
-    }
-    if (controls.length === 0) return null;
-    const active = FILTERS.some((f) => state.filters[f.id]);
-    return h(
-        "div",
-        { class: "filters", role: "group", "aria-label": "Filtrer le classement" },
-        controls,
-        active
-            ? h(
-                  "button",
-                  {
-                      type: "button",
-                      class: "link filter-reset",
-                      dataset: { fid: "filter-reset" },
-                      onclick: () => {
-                          state.filters = {};
-                          remember(FILTERS_KEY, "{}");
-                          renderBoard(true);
-                      }
-                  },
-                  "Tout afficher"
-              )
-            : null
+        const select = h("select", {
+            id,
+            onchange: (event) => setFilter(filter.id, event.target.value),
+            // Les choix proposés sont remis à jour dès que la liste n'est plus sélectionnée
+            onblur: () => syncFilterBar()
+        });
+        const label = h("label", { class: "filter", for: id }, h("span", null, filter.label), select);
+        filterControls.set(filter.id, { label, select, signature: null });
+        return label;
+    });
+    const reset = h(
+        "button",
+        {
+            type: "button",
+            class: "link filter-reset",
+            onclick: () => {
+                state.filters = {};
+                remember(FILTERS_KEY, "{}");
+                renderBoard();
+            }
+        },
+        "Tout afficher"
     );
+    filterEl = h("div", { class: "filters", role: "group", "aria-label": "Filtrer le classement" }, controls, reset);
+    filterEl.reset = reset;
+}
+
+/** Met la barre en accord avec les données : choix proposés, effectifs, valeur, visibilité. */
+function syncFilterBar() {
+    let any = false;
+    for (const filter of FILTERS) {
+        const control = filterControls.get(filter.id);
+        const options = filterOptions(state.students, filter);
+        const value = state.filters[filter.id] || "";
+        control.label.hidden = options.length === 0;
+        if (options.length > 0) any = true;
+        const signature = JSON.stringify([options, value]);
+        if (signature === control.signature) continue;
+        // Liste en cours d'utilisation : on n'y touche pas, elle sera resynchronisée en la quittant
+        if (document.activeElement === control.select) continue;
+        replace(control.select, h("option", { value: "" }, filter.all), options.map((o) => h("option", { value: o.value }, `${o.label} (${o.count})`)));
+        control.select.value = value;
+        control.signature = signature;
+    }
+    filterEl.hidden = !any;
+    filterEl.reset.hidden = !FILTERS.some((f) => state.filters[f.id]);
 }
 
 function positionCard(board, filtered) {
@@ -810,31 +817,24 @@ function renderDeleteDialog() {
     );
 }
 
-let pendingRender = false;
-
-function renderBoard(force = false) {
+function renderBoard() {
     if (!state.loaded) {
         if (state.loadError) return renderFatal(state.loadError);
         return renderLoading("Chargement du classement…");
     }
-    // Ne pas refermer une liste de filtre ouverte : la mise à jour attend la fin du choix
     const active = document.activeElement;
-    if (!force && active && active.tagName === "SELECT" && active.closest(".filters")) {
-        pendingRender = true;
-        return;
-    }
-    pendingRender = false;
     const focusId = active && root.contains(active) && active.dataset ? active.dataset.fid : null;
 
     state.filters = sanitizeFilters(state.students, state.filters);
     const filtered = FILTERS.some((f) => state.filters[f.id]);
     const students = applyFilters(state.students, state.filters);
     const board = buildLeaderboard(students, state.category);
-    const main = [
+    const before = [
         state.loadError ? h("p", { class: "banner", role: "status" }, `Mise à jour impossible pour l'instant (${state.loadError}) — dernières données affichées.`) : null,
         kindTabs(),
-        categoryChips(students),
-        filterBar(),
+        categoryChips(students)
+    ].filter(Boolean);
+    const after = [
         h(
             "section",
             { class: "card" },
@@ -849,12 +849,17 @@ function renderBoard(force = false) {
         summarySection(students, filtered)
     ].filter(Boolean);
 
-    // Le profil reste en place (saisie en cours, focus) : seul le classement est remplacé
+    // Les filtres et le profil restent en place (liste ouverte, saisie en cours, focus) :
+    // seul le reste du classement est remplacé autour d'eux.
     if (!accountEl) buildAccount();
-    if (accountEl.parentNode !== root) replace(root, main, accountEl);
+    if (!filterEl) buildFilterBar();
+    syncFilterBar();
+    if (filterEl.parentNode !== root || accountEl.parentNode !== root) replace(root, before, filterEl, after, accountEl);
     else {
-        while (root.firstChild !== accountEl) root.firstChild.remove();
-        accountEl.before(...main);
+        while (root.firstChild !== filterEl) root.firstChild.remove();
+        filterEl.before(...before);
+        while (filterEl.nextSibling !== accountEl) filterEl.nextSibling.remove();
+        accountEl.before(...after);
     }
     if (focusId) {
         const target = root.querySelector(`[data-fid="${CSS.escape(focusId)}"]`);
@@ -917,7 +922,7 @@ function stopBoard() {
     state.loaded = false;
     liveEl.hidden = true;
     accountEl = null;
-    pendingRender = false;
+    filterEl = null;
     if (dialog.open) dialog.close();
     if (deleteDialog.open) deleteDialog.close();
 }

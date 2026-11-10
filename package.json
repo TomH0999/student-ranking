@@ -1,6 +1,6 @@
 {
   "name": "student-ranking",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "private": true,
   "type": "module",
   "description": "Classement en temps réel des étudiants du BUT1 Informatique, à partir des notes du gestionnaire de scolarité.",

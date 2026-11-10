@@ -271,7 +271,7 @@ test("un profil non renseigné s'affiche exactement comme avant (aucune étiquet
     await open(page, { session: asTom });
     await expect(rows(page)).toHaveCount(4);
     await expect(page.locator(".tags")).toHaveCount(0);
-    await expect(page.locator(".filters")).toHaveCount(0);
+    await expect(page.locator(".filters")).toBeHidden();
 });
 
 test("les informations de profil affichées apparaissent sous le nom", async ({ page }) => {
@@ -560,4 +560,36 @@ test("suppression : si la base refuse, le compte reste intact et l'erreur est af
     await expect(dialog.getByRole("alert")).toContainText("plus ancien que ce site");
     await expect(dialog).toBeVisible();
     expect(await page.evaluate(() => ({ items: window.__fake.items.length, profile: window.__fake.profiles.has("tom"), session: !!localStorage.getItem("gdn-supabase-auth") }))).toEqual({ items: 7, profile: true, session: true });
+});
+
+// ---------------------------------------------------------------------------
+// Régression : le direct ne doit pas s'arrêter après l'usage d'un filtre
+// ---------------------------------------------------------------------------
+test("après avoir choisi un filtre (liste encore sélectionnée), le classement continue de se mettre à jour en direct", async ({ page }) => {
+    await open(page, rich);
+    // Comme un vrai clic ou un appui : la liste prend le focus, et le garde après le choix
+    await page.locator("#filter-className").focus();
+    await page.locator("#filter-className").selectOption("S3");
+    await expect(page.locator("#filter-className")).toBeFocused();
+    await expect(page.getByTestId("my-rank")).toHaveText("2e / 2");
+
+    await page.evaluate(() => {
+        window.__fake.students.find((s) => s.owner === "tom").general = 19.9;
+        window.__fake.pulse();
+    });
+    await expect(page.getByTestId("my-rank")).toHaveText("1er / 2");
+    await expect(page.locator(".row.me .avg")).toHaveText("19.90");
+    // Le filtre garde sa valeur et le focus
+    await expect(page.locator("#filter-className")).toHaveValue("S3");
+    await expect(page.locator("#filter-className")).toBeFocused();
+
+    // Un nouvel inscrit dans une nouvelle classe apparaît dans la liste du filtre
+    await page.evaluate(() => {
+        window.__fake.students.push({ owner: "ines", general: 17, ues: {}, subjects: {} });
+        window.__fake.setProfile("ines", { display_name: "Inès", class_name: "S6" });
+        window.__fake.pulse();
+    });
+    await page.locator("#filter-className").blur();
+    await expect(page.locator("#filter-className option")).toHaveText(["Toutes les classes", "S3 (2)", "S5 (1)", "S6 (1)"]);
+    await expect(page.locator("#filter-className")).toHaveValue("S3");
 });
