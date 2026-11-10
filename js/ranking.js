@@ -33,6 +33,76 @@ export function categoriesOfKind(kind) {
     return CATEGORIES.filter((c) => c.kind === kind);
 }
 
+/** Provenance (bac) et parcours visé en 2e année : identifiants stockés → libellés. */
+export const ORIGINS = [
+    { id: "general", label: "Bac général" },
+    { id: "sti2d", label: "STI2D" },
+    { id: "autre", label: "Autre" }
+];
+
+export const TRACKS = [
+    { id: "racdv", label: "RACDV", name: "Réalisation d'applications : conception, développement, validation" },
+    { id: "dacs", label: "DACS", name: "Déploiement d'applications communicantes et sécurisées" },
+    { id: "aged", label: "AGED", name: "Administration, gestion et exploitation des données" },
+    { id: "iamsi", label: "IAMSI", name: "Intégration d'applications et management du système d'information" },
+    { id: "indecis", label: "Indécis", name: "Pas encore décidé" },
+    { id: "autre", label: "Autre", name: "Autre projet" }
+];
+
+const labelOf = (list, id) => {
+    const item = list.find((x) => x.id === id);
+    return item ? item.label : null;
+};
+export const originLabel = (id) => labelOf(ORIGINS, id);
+export const trackLabel = (id) => labelOf(TRACKS, id);
+
+const textOrNull = (v) => (typeof v === "string" && v.trim() ? v.trim() : null);
+const knownOrNull = (v, list) => (list.some((x) => x.id === v) ? v : null);
+
+/**
+ * Filtres du classement. Chaque filtre porte sur une information de profil ; un étudiant
+ * qui masque cette information ne correspond à aucune valeur (il n'apparaît que sans filtre).
+ */
+export const FILTERS = [
+    { id: "className", label: "Classe", all: "Toutes les classes", text: (v) => v },
+    { id: "tdGroup", label: "Groupe TD", all: "Tous les groupes", text: (v) => v },
+    { id: "origin", label: "Provenance", all: "Toutes les provenances", text: originLabel },
+    { id: "track", label: "Parcours visé", all: "Tous les parcours", text: trackLabel }
+];
+
+/** Valeurs proposées pour un filtre : celles réellement présentes, avec leur effectif. */
+export function filterOptions(students, filter) {
+    const counts = new Map();
+    for (const s of students) {
+        const v = s[filter.id];
+        if (v) counts.set(v, (counts.get(v) || 0) + 1);
+    }
+    return [...counts.entries()]
+        .map(([value, count]) => ({ value, count, label: filter.text(value) || value }))
+        .sort((a, b) => a.label.localeCompare(b.label, "fr", { numeric: true }));
+}
+
+/** Ne garde que les filtres dont la valeur existe encore (un profil a pu changer entre-temps). */
+export function sanitizeFilters(students, selected) {
+    const out = {};
+    for (const filter of FILTERS) {
+        const value = selected && selected[filter.id];
+        if (value && students.some((s) => s[filter.id] === value)) out[filter.id] = value;
+    }
+    return out;
+}
+
+export function applyFilters(students, selected) {
+    const active = FILTERS.filter((f) => selected && selected[f.id]);
+    if (active.length === 0) return students;
+    return students.filter((s) => active.every((f) => s[f.id] === selected[f.id]));
+}
+
+/** Étiquettes de profil affichées sous le nom, dans l'ordre : classe, groupe, provenance, parcours. */
+export function profileTags(student) {
+    return [student.className, student.tdGroup, originLabel(student.origin), trackLabel(student.track)].filter(Boolean);
+}
+
 const finite = (v) => (typeof v === "number" && Number.isFinite(v) ? v : null);
 
 function numberMap(obj) {
@@ -60,7 +130,14 @@ export function normalizeSnapshot(rows) {
             isMe: row.is_me === true,
             general,
             ues: numberMap(row.ue_averages),
-            subjects: numberMap(row.subject_averages)
+            subjects: numberMap(row.subject_averages),
+            // Profil : uniquement ce que l'étudiant a choisi d'afficher (le reste arrive à null)
+            origin: knownOrNull(row.origin, ORIGINS),
+            track: knownOrNull(row.track, TRACKS),
+            className: textOrNull(row.class_name),
+            tdGroup: textOrNull(row.td_group),
+            studentNumber: textOrNull(row.student_number),
+            sharesGrades: row.shares_grades === true
         });
     }
     return students;
@@ -125,6 +202,83 @@ export function mySummary(students) {
 /** « 1er », « 2e », … */
 export function ordinal(rank) {
     return rank === 1 ? "1er" : `${rank}e`;
+}
+
+const cleanText = (v) => (typeof v === "string" ? v.trim().replace(/\s+/g, " ") : "");
+
+/**
+ * Valide le formulaire de profil (mêmes règles que la base). Renvoie { ok, value, errors } ;
+ * value est prêt à être enregistré (champs vides → null, classe et groupe en majuscules).
+ */
+export function validateProfile(input) {
+    const errors = {};
+    const pseudo = validateDisplayName(input.displayName);
+    if (!pseudo.ok) errors.displayName = pseudo.error;
+
+    const firstName = cleanText(input.firstName);
+    const lastName = cleanText(input.lastName);
+    if (firstName.length > 30) errors.firstName = "Prénom trop long (30 caractères maximum).";
+    else if (/^[ée]tudiant/i.test(firstName)) errors.firstName = "Ce prénom est réservé.";
+    if (lastName.length > 30) errors.lastName = "Nom trop long (30 caractères maximum).";
+
+    const nameMode = input.nameMode === "real" ? "real" : "pseudo";
+    if (nameMode === "real" && !firstName && !lastName) errors.nameMode = "Indiquez votre prénom ou votre nom pour l'afficher.";
+
+    const studentNumber = cleanText(input.studentNumber).replace(/\s/g, "");
+    if (studentNumber && !/^[0-9A-Za-z]{1,20}$/.test(studentNumber)) errors.studentNumber = "N° étudiant invalide (lettres et chiffres, 20 maximum).";
+
+    const className = cleanText(input.className).toUpperCase();
+    const tdGroup = cleanText(input.tdGroup).toUpperCase();
+    if (className.length > 16) errors.className = "Classe trop longue (16 caractères maximum).";
+    if (tdGroup.length > 16) errors.tdGroup = "Groupe trop long (16 caractères maximum).";
+
+    const ok = Object.keys(errors).length === 0;
+    return {
+        ok,
+        errors,
+        value: ok
+            ? {
+                  displayName: pseudo.value,
+                  firstName: firstName || null,
+                  lastName: lastName || null,
+                  nameMode,
+                  studentNumber: studentNumber || null,
+                  origin: knownOrNull(input.origin, ORIGINS),
+                  className: className || null,
+                  tdGroup: tdGroup || null,
+                  track: knownOrNull(input.track, TRACKS),
+                  showOrigin: input.showOrigin !== false,
+                  showClass: input.showClass !== false,
+                  showTdGroup: input.showTdGroup !== false,
+                  showTrack: input.showTrack !== false,
+                  showStudentNumber: input.showStudentNumber === true,
+                  showGrades: input.showGrades === true
+              }
+            : null
+    };
+}
+
+/** Détail des notes partagées : assaini puis regroupé par matière, dans l'ordre du programme. */
+export function groupGrades(rows) {
+    const bySubject = new Map();
+    if (Array.isArray(rows)) {
+        for (const row of rows) {
+            if (!row || typeof row !== "object") continue;
+            const score = finite(row.score);
+            const max = finite(row.max);
+            const coeff = finite(row.coeff);
+            if (score === null || max === null || coeff === null || max <= 0) continue;
+            const code = String(row.subject_code);
+            if (!bySubject.has(code)) bySubject.set(code, []);
+            bySubject.get(code).push({ name: textOrNull(row.name) || "Évaluation", score, max, coeff });
+        }
+    }
+    return ALL_SUBJECTS.filter((s) => bySubject.has(s.code)).map((s) => ({ code: s.code, name: s.name, grades: bySubject.get(s.code) }));
+}
+
+/** Nombre affiché comme dans l'application : virgule française, sans zéros inutiles. */
+export function formatNumber(value) {
+    return String(Math.round(value * 100) / 100).replace(".", ",");
 }
 
 /** Valide un pseudo côté client (mêmes règles que la contrainte SQL). Renvoie { ok, value, error }. */

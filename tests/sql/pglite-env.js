@@ -14,6 +14,8 @@ const read = (...p) => readFileSync(path.join(root, ...p), "utf8");
 
 export const APP_SCHEMA_SQL = read("tests", "reference", "app-schema.sql");
 export const RANKING_SQL = read("supabase", "ranking.sql");
+/** Script de la version précédente, pour tester la mise à jour d'une base déjà installée. */
+export const RANKING_SQL_V1_0_1 = read("tests", "reference", "ranking-v1.0.1.sql");
 export const UNINSTALL_SQL = read("supabase", "uninstall.sql");
 
 const SUPABASE_EMULATION = `

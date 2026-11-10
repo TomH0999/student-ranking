@@ -6,7 +6,7 @@
  *  - signal temps réel ; robustesse face aux données absurdes ; idempotence ; désinstallation.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { createDatabase, asRole, createUser, addGrade, join, snapshot, pulseVersion, RANKING_SQL, UNINSTALL_SQL } from "./pglite-env.js";
+import { createDatabase, asRole, createUser, addGrade, join, snapshot, pulseVersion, RANKING_SQL, RANKING_SQL_V1_0_1, UNINSTALL_SQL } from "./pglite-env.js";
 import { calculateAllAverages, sortGradesForCalculation } from "../reference/grades-calc.js";
 import { ALL_SUBJECTS, PROGRAM_S1, COEFFICIENTS_UE } from "../../js/program.js";
 
@@ -152,7 +152,12 @@ describe("participants et confidentialité", () => {
         expect(mine[0].general_average).toBe(11);
         const dump = JSON.stringify(rows);
         for (const secret of [alice, bob, "alice@example.com", "bob@example.com"]) expect(dump).not.toContain(secret);
-        expect(Object.keys(rows[0]).sort()).toEqual(["display_name", "general_average", "is_me", "student_key", "subject_averages", "ue_averages"]);
+        expect(Object.keys(rows[0]).sort()).toEqual([
+            "class_name", "display_name", "general_average", "is_me", "origin", "shares_grades",
+            "student_key", "student_number", "subject_averages", "td_group", "track", "ue_averages"
+        ]);
+        // Profil non renseigné : rien de plus qu'en v1.0
+        expect(mine[0]).toMatchObject({ origin: null, class_name: null, td_group: null, track: null, student_number: null, shares_grades: false });
     });
 
     it("accès anonyme refusé partout", async () => {
@@ -207,6 +212,146 @@ describe("participants et confidentialité", () => {
         await asRole(db, eve, (tx) => tx.query("delete from public.ranking_profiles where user_id = $1", [eve]));
         expect((await snapshot(db, alice)).map((r) => r.display_name)).not.toContain("Eve");
         expect(await snapshot(db, eve)).toEqual([]);
+    });
+});
+
+describe("profil personnalisable et visibilité", () => {
+    let nina, omar, paul, outsider;
+    const setProfile = (user, patch) => {
+        const keys = Object.keys(patch);
+        return asRole(db, user, (tx) =>
+            tx.query(`update public.ranking_profiles set ${keys.map((k, i) => `${k} = $${i + 2}`).join(", ")} where user_id = $1`, [user, ...keys.map((k) => patch[k])])
+        );
+    };
+    const rowOf = async (viewer, name) => (await snapshot(db, viewer)).find((r) => r.display_name === name);
+    const gradesOf = async (viewer, key) => (await asRole(db, viewer, (tx) => tx.query("select * from public.ranking_student_grades($1)", [key]))).rows;
+
+    beforeAll(async () => {
+        nina = await createUser(db, "nina@example.com");
+        omar = await createUser(db, "omar@example.com");
+        paul = await createUser(db, "paul@example.com");
+        outsider = await createUser(db, "outsider@example.com");
+        await join(db, nina, "Nina");
+        await join(db, omar, "Omar");
+        await join(db, paul, "Paul");
+        await addGrade(db, nina, { name: "TP noté", subjectCode: "R1.01", score: 14.5, max: 20, coeff: 2, createdAt: 2 });
+        await addGrade(db, nina, { name: "Partiel", subjectCode: "R1.01", score: 8, max: 10, coeff: 1, createdAt: 1 });
+        await addGrade(db, nina, { name: "Matière inconnue", subjectCode: "X9.99", score: 1, max: 20, coeff: 1, createdAt: 3 });
+        await addGrade(db, nina, { name: "Barème nul", subjectCode: "R1.02", score: 1, max: 0, coeff: 1, createdAt: 4 });
+        await addGrade(db, omar, { name: "Oral", subjectCode: "R1.10", score: 12, max: 20, coeff: 1, createdAt: 1 });
+        await addGrade(db, paul, { name: "Projet", subjectCode: "SAE 1.01", score: 16, max: 20, coeff: 1, createdAt: 1 });
+    });
+
+    it("les informations renseignées sont visibles par défaut, sauf le n° étudiant et le détail des notes", async () => {
+        await setProfile(nina, { origin: "sti2d", class_name: "S1A", td_group: "TD2", track: "racdv", student_number: "22104567" });
+        expect(await rowOf(omar, "Nina")).toMatchObject({ origin: "sti2d", class_name: "S1A", td_group: "TD2", track: "racdv", student_number: null, shares_grades: false });
+    });
+
+    it("chaque information masquée n'est plus transmise, y compris à soi-même", async () => {
+        await setProfile(nina, { show_origin: false, show_td_group: false, show_student_number: true });
+        expect(await rowOf(omar, "Nina")).toMatchObject({ origin: null, class_name: "S1A", td_group: null, track: "racdv", student_number: "22104567" });
+        expect(await rowOf(nina, "Nina")).toMatchObject({ origin: null, td_group: null, is_me: true });
+        await setProfile(nina, { show_class: false, show_track: false, show_student_number: false });
+        const row = await rowOf(omar, "Nina");
+        expect(row).toMatchObject({ origin: null, class_name: null, td_group: null, track: null, student_number: null });
+        expect(JSON.stringify(await snapshot(db, omar))).not.toContain("22104567");
+        // Le propriétaire, lui, relit tout dans son profil
+        const own = await asRole(db, nina, (tx) => tx.query("select origin, class_name, student_number from public.ranking_profiles"));
+        expect(own.rows).toEqual([{ origin: "sti2d", class_name: "S1A", student_number: "22104567" }]);
+    });
+
+    it("nom affiché : pseudo par défaut, prénom et nom sur demande, repli si rien n'est renseigné", async () => {
+        await setProfile(omar, { first_name: "Omar", last_name: "Benali" });
+        expect(await rowOf(nina, "Omar")).toBeTruthy();
+        await setProfile(omar, { name_mode: "real" });
+        expect(await rowOf(nina, "Omar Benali")).toBeTruthy();
+        expect(await rowOf(nina, "Omar")).toBeUndefined();
+        await setProfile(omar, { last_name: null });
+        expect(await rowOf(nina, "Omar")).toBeTruthy();
+        await setProfile(omar, { first_name: null });
+        expect(await rowOf(nina, "Omar")).toBeTruthy(); // mode « real » sans nom : retour au pseudo
+        await setProfile(omar, { display_name: null });
+        expect((await snapshot(db, omar)).find((r) => r.is_me).display_name).toMatch(/^Étudiant [0-9A-F]{4}$/);
+        await setProfile(omar, { display_name: "Omar", name_mode: "pseudo" });
+    });
+
+    it("détail des notes : seulement si l'étudiant le partage, ou pour soi-même", async () => {
+        const ninaKey = (await rowOf(omar, "Nina")).student_key;
+        expect(await gradesOf(omar, ninaKey)).toEqual([]);
+        expect(await gradesOf(outsider, ninaKey)).toEqual([]);
+        const own = await gradesOf(nina, ninaKey);
+        expect(own).toEqual([
+            { subject_code: "R1.01", name: "Partiel", score: 8, max: 10, coeff: 1 },
+            { subject_code: "R1.01", name: "TP noté", score: 14.5, max: 20, coeff: 2 }
+        ]);
+
+        await setProfile(nina, { show_grades: true });
+        expect((await rowOf(omar, "Nina")).shares_grades).toBe(true);
+        expect(await gradesOf(omar, ninaKey)).toEqual(own);
+        // Un compte non inscrit ne voit rien, même si le détail est partagé
+        expect(await gradesOf(outsider, ninaKey)).toEqual([]);
+        expect(await gradesOf(omar, "cle-inexistante")).toEqual([]);
+        await expect(asRole(db, null, (tx) => tx.query("select * from public.ranking_student_grades($1)", [ninaKey]))).rejects.toThrow(/permission denied/);
+
+        await setProfile(nina, { show_grades: false });
+        expect(await gradesOf(omar, ninaKey)).toEqual([]);
+    });
+
+    it("valeurs refusées par la base", async () => {
+        const bad = [
+            { origin: "inconnu" }, { track: "pirate" }, { name_mode: "autre" }, { class_name: "s1a" }, { class_name: " S1A" },
+            { class_name: "X".repeat(17) }, { td_group: "" }, { student_number: "12 34" }, { student_number: "1".repeat(21) },
+            { first_name: "Étudiant" }, { first_name: "x".repeat(31) }, { last_name: " Dupont" }
+        ];
+        for (const patch of bad) await expect(setProfile(paul, patch), JSON.stringify(patch)).rejects.toThrow(/ranking_profiles_details_check/);
+        await setProfile(paul, { origin: "general", track: "indecis", class_name: "S1B", td_group: "TD1", student_number: "A1234", first_name: "Paul", last_name: "Martin" });
+    });
+
+    it("on ne peut toujours modifier que son propre profil, et pas sa date ni son identifiant", async () => {
+        const r = await asRole(db, omar, (tx) => tx.query("update public.ranking_profiles set show_grades = true, class_name = 'PIRATE' where user_id = $1", [nina]));
+        expect(r.affectedRows).toBe(0);
+        await expect(asRole(db, omar, (tx) => tx.query("update public.ranking_profiles set joined_at = now() where user_id = $1", [omar]))).rejects.toThrow(/permission denied/);
+        await expect(asRole(db, omar, (tx) => tx.query("update public.ranking_profiles set user_id = $2 where user_id = $1", [omar, outsider]))).rejects.toThrow(/permission denied/);
+    });
+
+    it("modifier son profil déclenche le signal temps réel", async () => {
+        const before = await pulseVersion(db);
+        await setProfile(paul, { show_class: false });
+        expect(await pulseVersion(db)).toBeGreaterThan(before);
+    });
+});
+
+describe("mise à jour depuis la v1.0.1", () => {
+    it("les inscrits existants gardent leur affichage ; l'ancien site continue de fonctionner", async () => {
+        const old = await createDatabase({ ranking: false });
+        await old.exec(RANKING_SQL_V1_0_1);
+        const a = await createUser(old, "ancien-a@example.com");
+        const b = await createUser(old, "ancien-b@example.com");
+        await join(old, a, "Ancienne");
+        await join(old, b);
+        await addGrade(old, a, { subjectCode: "R1.01", score: 13.37, max: 20, coeff: 3, createdAt: 1 });
+        await addGrade(old, a, { subjectCode: "SAE 1.02", score: 7.1, max: 10, coeff: 1, createdAt: 2 });
+        await addGrade(old, b, { subjectCode: "R1.01", score: 9, max: 20, coeff: 1, createdAt: 1 });
+        const before = await snapshot(old, a);
+
+        await old.exec(RANKING_SQL);
+        await old.exec(RANKING_SQL);
+
+        const after = await snapshot(old, a);
+        expect(after).toHaveLength(2);
+        // Toutes les colonnes lues par le site v1.0.1 sont identiques
+        const v1 = (rows) => rows.map(({ student_key, display_name, is_me, subject_averages, ue_averages, general_average }) => ({ student_key, display_name, is_me, subject_averages, ue_averages, general_average }));
+        expect(v1(after)).toEqual(v1(before));
+        for (const row of after) expect(row).toMatchObject({ origin: null, class_name: null, td_group: null, track: null, student_number: null, shares_grades: false });
+
+        // Requêtes du site v1.0.1 : inscription (deux colonnes) et changement de pseudo
+        const c = await createUser(old, "ancien-c@example.com");
+        await join(old, c, "Arrivée après");
+        await asRole(old, a, (tx) => tx.query("update public.ranking_profiles set display_name = 'Renommée' where user_id = $1", [a]));
+        expect((await snapshot(old, a)).find((r) => r.is_me).display_name).toBe("Renommée");
+        const profiles = await old.query("select count(*)::int as n from public.ranking_profiles");
+        expect(profiles.rows[0].n).toBe(3);
+        await old.close();
     });
 });
 
@@ -309,7 +454,7 @@ describe("robustesse", () => {
         expect(t.rows.map((x) => x.relname).sort()).toEqual(["items", "ranking_profiles", "ranking_pulse"]);
         for (const row of t.rows) expect(row.relrowsecurity, row.relname).toBe(true);
         const f = await db.query("select proname, proconfig from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and proname like 'ranking_%'");
-        expect(f.rows).toHaveLength(3);
+        expect(f.rows).toHaveLength(4);
         for (const row of f.rows) expect(row.proconfig, row.proname).toContain('search_path=""');
     });
 

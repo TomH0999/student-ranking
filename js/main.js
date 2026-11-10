@@ -9,11 +9,13 @@ import { RANKING_VERSION } from "./version.js";
 import { createApi } from "./api.js";
 import { h, replace } from "./dom.js";
 import {
-    KINDS, GENERAL, categoryById, categoriesOfKind, normalizeSnapshot, buildLeaderboard, mySummary,
-    formatAverage, ordinal, validateDisplayName
+    KINDS, GENERAL, CATEGORIES, ORIGINS, TRACKS, FILTERS, categoryById, categoriesOfKind, normalizeSnapshot,
+    buildLeaderboard, mySummary, filterOptions, sanitizeFilters, applyFilters, profileTags, originLabel, trackLabel,
+    groupGrades, formatAverage, formatNumber, ordinal, validateDisplayName, validateProfile
 } from "./ranking.js";
 
 const CATEGORY_KEY = "student-ranking:category";
+const FILTERS_KEY = "student-ranking:filters";
 const POLL_MS = 30000;
 const DEBOUNCE_MS = 250;
 
@@ -35,6 +37,15 @@ function loadCategory() {
     }
 }
 
+function loadFilters() {
+    try {
+        const saved = JSON.parse(localStorage.getItem(FILTERS_KEY));
+        return saved && typeof saved === "object" && !Array.isArray(saved) ? saved : {};
+    } catch {
+        return {};
+    }
+}
+
 const config = readConfig();
 const state = {
     session: null,
@@ -42,6 +53,7 @@ const state = {
     students: [],
     loaded: false,
     category: loadCategory(),
+    filters: loadFilters(),
     live: "connecting",
     lastUpdate: null,
     loadError: null
@@ -199,6 +211,7 @@ function renderJoin() {
                 { class: "bullets" },
                 h("li", null, "Vos notes détaillées et votre adresse e-mail ne sont jamais partagées."),
                 h("li", null, "Sans pseudo, vous apparaissez sous un nom anonyme du type « Étudiant 4F2A »."),
+                h("li", null, "Vous pourrez ensuite compléter votre profil (classe, groupe TD, provenance, parcours visé…) et choisir ce qui est affiché."),
                 h("li", null, "Vous pouvez quitter le classement à tout moment.")
             ),
             form,
@@ -210,14 +223,24 @@ function renderJoin() {
 // ---------------------------------------------------------------------------
 // Classement
 // ---------------------------------------------------------------------------
-function selectCategory(category) {
-    state.category = category;
+function remember(key, value) {
     try {
-        localStorage.setItem(CATEGORY_KEY, category.id);
+        localStorage.setItem(key, value);
     } catch {
         /* stockage indisponible : le choix n'est simplement pas mémorisé */
     }
-    renderBoard();
+}
+
+function selectCategory(category) {
+    state.category = category;
+    remember(CATEGORY_KEY, category.id);
+    renderBoard(true);
+}
+
+function setFilter(id, value) {
+    state.filters = { ...state.filters, [id]: value || undefined };
+    remember(FILTERS_KEY, JSON.stringify(state.filters));
+    renderBoard(true);
 }
 
 function kindTabs() {
@@ -230,6 +253,7 @@ function kindTabs() {
                 {
                     type: "button",
                     class: "tab",
+                    dataset: { fid: `kind:${kind.id}` },
                     "aria-pressed": String(state.category.kind === kind.id),
                     onclick: () => {
                         if (state.category.kind !== kind.id) selectCategory(categoriesOfKind(kind.id)[0]);
@@ -241,18 +265,19 @@ function kindTabs() {
     );
 }
 
-function categoryChips() {
+function categoryChips(students) {
     if (state.category.kind === "general") return null;
     return h(
         "div",
         { class: "chips", role: "group", "aria-label": state.category.kind === "ue" ? "Unité d'enseignement" : "Matière" },
         categoriesOfKind(state.category.kind).map((category) => {
-            const count = buildLeaderboard(state.students, category).count;
+            const count = buildLeaderboard(students, category).count;
             return h(
                 "button",
                 {
                     type: "button",
                     class: `chip${count === 0 ? " empty" : ""}`,
+                    dataset: { fid: `cat:${category.id}` },
                     "aria-pressed": String(category.id === state.category.id),
                     title: `${category.name} — ${count} classé${count > 1 ? "s" : ""}`,
                     onclick: () => selectCategory(category)
@@ -263,8 +288,65 @@ function categoryChips() {
     );
 }
 
-function positionCard(board) {
+/** Filtres par classe, groupe, provenance, parcours : seuls ceux qui ont des valeurs sont proposés. */
+function filterBar() {
+    const controls = [];
+    for (const filter of FILTERS) {
+        const options = filterOptions(state.students, filter);
+        if (options.length === 0) continue;
+        const id = `filter-${filter.id}`;
+        controls.push(
+            h(
+                "label",
+                { class: "filter", for: id },
+                h("span", null, filter.label),
+                h(
+                    "select",
+                    {
+                        id,
+                        dataset: { fid: id },
+                        onchange: (event) => setFilter(filter.id, event.target.value),
+                        onblur: () => {
+                            if (pendingRender) renderBoard(true);
+                        }
+                    },
+                    h("option", { value: "" }, filter.all),
+                    options.map((o) => h("option", { value: o.value, selected: state.filters[filter.id] === o.value }, `${o.label} (${o.count})`))
+                )
+            )
+        );
+    }
+    if (controls.length === 0) return null;
+    const active = FILTERS.some((f) => state.filters[f.id]);
+    return h(
+        "div",
+        { class: "filters", role: "group", "aria-label": "Filtrer le classement" },
+        controls,
+        active
+            ? h(
+                  "button",
+                  {
+                      type: "button",
+                      class: "link filter-reset",
+                      dataset: { fid: "filter-reset" },
+                      onclick: () => {
+                          state.filters = {};
+                          remember(FILTERS_KEY, "{}");
+                          renderBoard(true);
+                      }
+                  },
+                  "Tout afficher"
+              )
+            : null
+    );
+}
+
+function positionCard(board, filtered) {
     if (!board.mine) {
+        const me = state.students.find((s) => s.isMe);
+        if (filtered && me && buildLeaderboard([me], board.category).mine) {
+            return h("div", { class: "position none" }, h("p", null, "Vous ne faites pas partie de la sélection affichée (ou vous masquez l'information filtrée dans votre profil)."));
+        }
         return h(
             "div",
             { class: "position none" },
@@ -284,9 +366,9 @@ function positionCard(board) {
     );
 }
 
-function boardList(board) {
+function boardList(board, filtered) {
     if (board.count === 0) {
-        return h("p", { class: "empty-board" }, "Personne n'a encore de moyenne dans cette catégorie.");
+        return h("p", { class: "empty-board" }, filtered ? "Aucun étudiant de cette sélection n'a de moyenne ici." : "Personne n'a encore de moyenne dans cette catégorie.");
     }
     const next = new Map();
     const list = h(
@@ -297,13 +379,29 @@ function boardList(board) {
             const id = `${board.category.id}|${row.student.key}`;
             next.set(id, display);
             const changed = shown.has(id) && shown.get(id) !== display;
+            const tags = profileTags(row.student);
             return h(
                 "li",
-                { class: `row${row.student.isMe ? " me" : ""}${changed ? " changed" : ""}`, dataset: { rank: String(row.rank) } },
-                h("span", { class: `rank${row.rank <= 3 ? ` podium p${row.rank}` : ""}`, "aria-label": `${ordinal(row.rank)}${row.tied ? " ex æquo" : ""}` }, String(row.rank)),
-                h("span", { class: "name" }, h("span", { class: "name-text" }, row.student.name), row.student.isMe ? h("span", { class: "badge" }, "Moi") : null),
-                h("span", { class: "bar", "aria-hidden": "true" }, h("span", { style: `width:${Math.max(0, Math.min(100, (row.value / 20) * 100)).toFixed(1)}%` })),
-                h("span", { class: "avg" }, display)
+                null,
+                h(
+                    "button",
+                    {
+                        type: "button",
+                        class: `row${row.student.isMe ? " me" : ""}${changed ? " changed" : ""}`,
+                        dataset: { rank: String(row.rank), fid: `row:${row.student.key}` },
+                        title: "Voir la fiche",
+                        onclick: () => openStudent(row.student.key)
+                    },
+                    h("span", { class: `rank${row.rank <= 3 ? ` podium p${row.rank}` : ""}`, "aria-label": `${ordinal(row.rank)}${row.tied ? " ex æquo" : ""}` }, String(row.rank)),
+                    h(
+                        "span",
+                        { class: "who" },
+                        h("span", { class: "name" }, h("span", { class: "name-text" }, row.student.name), row.student.isMe ? h("span", { class: "badge" }, "Moi") : null),
+                        tags.length ? h("span", { class: "tags" }, tags.join(" · ")) : null
+                    ),
+                    h("span", { class: "bar", "aria-hidden": "true" }, h("span", { style: `width:${Math.max(0, Math.min(100, (row.value / 20) * 100)).toFixed(1)}%` })),
+                    h("span", { class: "avg" }, display)
+                )
             );
         })
     );
@@ -313,13 +411,14 @@ function boardList(board) {
     return list;
 }
 
-function summarySection() {
-    const summary = mySummary(state.students);
+function summarySection(students, filtered) {
+    const summary = mySummary(students);
     if (summary.length === 0) return null;
+    const open = !document.getElementById("summary") || document.getElementById("summary").open;
     return h(
         "details",
-        { class: "card fold", open: true },
-        h("summary", null, "Mes classements"),
+        { class: "card fold", id: "summary", open },
+        h("summary", { dataset: { fid: "summary" } }, filtered ? "Mes classements (sélection affichée)" : "Mes classements"),
         h(
             "ul",
             { class: "summary" },
@@ -329,7 +428,7 @@ function summarySection() {
                     null,
                     h(
                         "button",
-                        { type: "button", class: "summary-row", "aria-current": item.category.id === state.category.id ? "true" : null, onclick: () => selectCategory(item.category) },
+                        { type: "button", class: "summary-row", dataset: { fid: `sum:${item.category.id}` }, "aria-current": item.category.id === state.category.id ? "true" : null, onclick: () => selectCategory(item.category) },
                         h("span", { class: "summary-code" }, item.category.code),
                         h("span", { class: "summary-name" }, item.category.name),
                         h("span", { class: "summary-avg" }, formatAverage(item.value)),
@@ -341,47 +440,241 @@ function summarySection() {
     );
 }
 
-function accountSection() {
+// ---------------------------------------------------------------------------
+// Fiche d'un étudiant
+// ---------------------------------------------------------------------------
+const dialog = h("dialog", { class: "sheet", "aria-labelledby": "sheet-title" });
+document.body.append(dialog);
+dialog.addEventListener("click", (event) => {
+    if (event.target === dialog) dialog.close();
+});
+dialog.addEventListener("close", () => {
+    sheet.key = null;
+});
+const sheet = { key: null, grades: null, gradesError: null, seq: 0 };
+
+function openStudent(key) {
+    sheet.key = key;
+    sheet.grades = null;
+    sheet.gradesError = null;
+    renderSheet();
+    if (!dialog.open) dialog.showModal();
+    loadSheetGrades();
+}
+
+async function loadSheetGrades() {
+    const student = state.students.find((s) => s.key === sheet.key);
+    if (!student || !(student.sharesGrades || student.isMe)) return;
+    const seq = ++sheet.seq;
+    try {
+        const rows = await api.studentGrades(student.key);
+        if (seq !== sheet.seq || sheet.key !== student.key) return;
+        sheet.grades = groupGrades(rows);
+        sheet.gradesError = null;
+    } catch (e) {
+        if (seq !== sheet.seq || sheet.key !== student.key) return;
+        sheet.gradesError = e.message;
+    }
+    renderSheet();
+}
+
+function sheetAverages(student) {
+    const rows = [];
+    for (const category of CATEGORIES) {
+        const board = buildLeaderboard(state.students, category);
+        const mine = board.rows.find((r) => r.student.key === student.key);
+        if (mine) rows.push(h("li", null, h("span", { class: "summary-code" }, category.code), h("span", { class: "summary-name" }, category.name), h("span", { class: "summary-avg" }, formatAverage(mine.value)), h("span", { class: "summary-rank" }, ordinal(mine.rank), h("small", null, ` / ${board.count}`))));
+    }
+    return h("ul", { class: "summary static" }, rows);
+}
+
+function sheetGrades(student) {
+    if (!student.sharesGrades && !student.isMe) return h("p", { class: "hint" }, "Cet étudiant ne partage pas le détail de ses notes.");
+    if (sheet.gradesError) return h("p", { class: "form-error", role: "alert" }, sheet.gradesError);
+    if (sheet.grades === null) return h("p", { class: "hint", role: "status" }, "Chargement des notes…");
+    if (sheet.grades.length === 0) return h("p", { class: "hint" }, "Aucune note.");
+    return [
+        student.isMe && !student.sharesGrades ? h("p", { class: "hint" }, "Visible par vous seul : vous ne partagez pas le détail de vos notes.") : null,
+        sheet.grades.map((subject) =>
+            h(
+                "div",
+                { class: "grades" },
+                h("h4", null, h("span", { class: "summary-code" }, subject.code), " ", subject.name),
+                h(
+                    "ul",
+                    null,
+                    subject.grades.map((g) => h("li", null, h("span", { class: "grade-name" }, g.name), h("span", { class: "grade-coeff" }, `coeff. ${formatNumber(g.coeff)}`), h("span", { class: "grade-score" }, `${formatNumber(g.score)} / ${formatNumber(g.max)}`)))
+                )
+            )
+        )
+    ];
+}
+
+function renderSheet() {
+    const student = state.students.find((s) => s.key === sheet.key);
+    if (!student) {
+        if (dialog.open) dialog.close();
+        return;
+    }
+    const facts = [
+        ["Classe", student.className],
+        ["Groupe TD", student.tdGroup],
+        ["Provenance", originLabel(student.origin)],
+        ["Parcours visé", trackLabel(student.track)],
+        ["N° étudiant", student.studentNumber]
+    ].filter(([, value]) => value);
+    replace(
+        dialog,
+        h(
+            "div",
+            { class: "sheet-head" },
+            h("h2", { id: "sheet-title" }, student.name, student.isMe ? h("span", { class: "badge" }, "Moi") : null),
+            h("button", { type: "button", class: "btn close", "aria-label": "Fermer la fiche", onclick: () => dialog.close() }, "Fermer")
+        ),
+        facts.length
+            ? h("dl", { class: "facts" }, facts.map(([label, value]) => h("div", null, h("dt", null, label), h("dd", null, value))))
+            : h("p", { class: "hint" }, student.isMe ? "Vous n'affichez aucune information de profil." : "Cet étudiant n'affiche aucune information de profil."),
+        h("h3", null, "Moyennes et rangs"),
+        sheetAverages(student),
+        h("h3", null, "Détail des notes"),
+        sheetGrades(student)
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Mon profil
+// ---------------------------------------------------------------------------
+let accountEl = null;
+
+function selectField(id, label, name, options, value) {
+    return h(
+        "label",
+        { class: "field", for: id },
+        h("span", null, label),
+        h("select", { id, name }, h("option", { value: "" }, "Non renseigné"), options.map((o) => h("option", { value: o.id, selected: o.id === value, title: o.name || null }, o.name && o.name !== o.label ? `${o.label} — ${o.name}` : o.label)))
+    );
+}
+
+function checkField(name, label, checked, hint = null) {
+    return h("label", { class: "check" }, h("input", { type: "checkbox", name, checked }), h("span", null, label, hint ? h("small", null, hint) : null));
+}
+
+function buildAccount() {
+    const p = state.profile;
+    const wasOpen = !!(accountEl && accountEl.open);
     const error = errorBox();
-    const save = h("button", { class: "btn", type: "submit" }, "Enregistrer");
+    const saved = h("span", { class: "saved", role: "status", hidden: true }, "Profil enregistré");
+    const save = h("button", { class: "btn primary", type: "submit" }, "Enregistrer");
     const form = h(
         "form",
         {
-            class: "form inline",
+            class: "form profile",
             novalidate: true,
+            oninput: () => {
+                saved.hidden = true;
+            },
             onsubmit: async (event) => {
                 event.preventDefault();
-                const name = validateDisplayName(form.elements.pseudo.value);
-                if (!name.ok) return showError(error, name.error);
+                const f = form.elements;
+                const result = validateProfile({
+                    displayName: f.pseudo.value,
+                    firstName: f.firstName.value,
+                    lastName: f.lastName.value,
+                    nameMode: f.nameMode.value,
+                    studentNumber: f.studentNumber.value,
+                    origin: f.origin.value,
+                    className: f.className.value,
+                    tdGroup: f.tdGroup.value,
+                    track: f.track.value,
+                    showOrigin: f.showOrigin.checked,
+                    showClass: f.showClass.checked,
+                    showTdGroup: f.showTdGroup.checked,
+                    showTrack: f.showTrack.checked,
+                    showStudentNumber: f.showStudentNumber.checked,
+                    showGrades: f.showGrades.checked
+                });
+                if (!result.ok) return showError(error, Object.values(result.errors)[0]);
                 showError(error, "");
                 try {
-                    state.profile = await withBusy(save, () => api.rename(state.session.userId, name.value));
+                    state.profile = await withBusy(save, () => api.saveProfile(state.session.userId, result.value));
+                    buildAccount();
+                    accountEl.querySelector(".saved").hidden = false;
                     await refresh();
                 } catch (e) {
                     showError(error, e.message);
                 }
             }
         },
-        field("pseudo", "Pseudo affiché", { name: "pseudo", type: "text", maxlength: 24, autocomplete: "nickname", value: state.profile.displayName || "", placeholder: "Vide = nom anonyme" }),
-        save
-    );
-    return h(
-        "details",
-        { class: "card fold", id: "account" },
-        h("summary", null, "Mon compte"),
-        h("p", { class: "hint" }, `Connecté : ${state.session.email}`),
-        form,
+        h(
+            "fieldset",
+            null,
+            h("legend", null, "Identité"),
+            h(
+                "div",
+                { class: "grid" },
+                field("pseudo", "Pseudo", { name: "pseudo", type: "text", maxlength: 24, autocomplete: "nickname", value: p.displayName || "", placeholder: "Vide = nom anonyme" }),
+                field("first-name", "Prénom", { name: "firstName", type: "text", maxlength: 30, autocomplete: "given-name", value: p.firstName || "" }),
+                field("last-name", "Nom", { name: "lastName", type: "text", maxlength: 30, autocomplete: "family-name", value: p.lastName || "" })
+            ),
+            h(
+                "div",
+                { class: "radios", role: "radiogroup", "aria-label": "Nom affiché dans le classement" },
+                h("span", { class: "radios-label" }, "Nom affiché dans le classement"),
+                h("label", { class: "check" }, h("input", { type: "radio", name: "nameMode", value: "pseudo", checked: p.nameMode !== "real" }), h("span", null, "Mon pseudo")),
+                h("label", { class: "check" }, h("input", { type: "radio", name: "nameMode", value: "real", checked: p.nameMode === "real" }), h("span", null, "Mon prénom et mon nom"))
+            )
+        ),
+        h(
+            "fieldset",
+            null,
+            h("legend", null, "Scolarité"),
+            h(
+                "div",
+                { class: "grid" },
+                field("class-name", "Classe", { name: "className", type: "text", maxlength: 16, list: "known-classes", autocapitalize: "characters", value: p.className || "", placeholder: "ex. S1A" }),
+                field("td-group", "Groupe TD", { name: "tdGroup", type: "text", maxlength: 16, list: "known-groups", autocapitalize: "characters", value: p.tdGroup || "", placeholder: "ex. TD2" }),
+                selectField("origin", "Provenance", "origin", ORIGINS, p.origin),
+                selectField("track", "Parcours visé en 2e année", "track", TRACKS, p.track),
+                field("student-number", "N° étudiant", { name: "studentNumber", type: "text", maxlength: 20, inputmode: "numeric", autocomplete: "off", value: p.studentNumber || "" })
+            ),
+            h("datalist", { id: "known-classes" }),
+            h("datalist", { id: "known-groups" })
+        ),
+        h(
+            "fieldset",
+            null,
+            h("legend", null, "Ce que les autres inscrits voient"),
+            h("p", { class: "hint" }, "Vos moyennes et votre nom affiché sont toujours visibles. Une information masquée ne sert pas non plus aux filtres."),
+            h(
+                "div",
+                { class: "checks" },
+                checkField("showClass", "Ma classe", p.showClass !== false),
+                checkField("showTdGroup", "Mon groupe TD", p.showTdGroup !== false),
+                checkField("showOrigin", "Ma provenance", p.showOrigin !== false),
+                checkField("showTrack", "Mon parcours visé", p.showTrack !== false),
+                checkField("showStudentNumber", "Mon n° étudiant", p.showStudentNumber === true),
+                checkField("showGrades", "Le détail de mes notes", p.showGrades === true, "Chaque évaluation avec sa note, son barème et son coefficient")
+            )
+        ),
         error,
+        h("div", { class: "actions" }, save, saved)
+    );
+    const next = h(
+        "details",
+        { class: "card fold", id: "account", open: wasOpen },
+        h("summary", null, "Mon profil"),
+        h("p", { class: "hint" }, `Connecté : ${state.session.email}. Tout est facultatif.`),
+        form,
         h(
             "div",
-            { class: "actions" },
+            { class: "actions end" },
             h(
                 "button",
                 {
                     class: "btn danger",
                     type: "button",
                     onclick: async () => {
-                        if (!window.confirm("Quitter le classement ? Vos moyennes ne seront plus visibles des autres (vos notes ne sont pas touchées).")) return;
+                        if (!window.confirm("Quitter le classement ? Vos moyennes et votre profil ne seront plus visibles des autres (vos notes ne sont pas touchées).")) return;
                         try {
                             await api.leave(state.session.userId);
                             stopBoard();
@@ -398,43 +691,73 @@ function accountSection() {
         ),
         h("p", { class: "hint" }, "Se déconnecter ici déconnecte aussi le gestionnaire de scolarité sur cet appareil lorsqu'ils sont hébergés sur le même site.")
     );
+    if (accountEl && accountEl.parentNode) accountEl.replaceWith(next);
+    accountEl = next;
+    fillSuggestions();
 }
 
-function renderBoard() {
+/** Classes et groupes déjà utilisés par d'autres : proposés à la saisie pour éviter les variantes. */
+function fillSuggestions() {
+    if (!accountEl) return;
+    for (const [id, key] of [["known-classes", "className"], ["known-groups", "tdGroup"]]) {
+        const list = accountEl.querySelector(`#${id}`);
+        const values = [...new Set(state.students.map((s) => s[key]).filter(Boolean))].sort();
+        replace(list, values.map((value) => h("option", { value })));
+    }
+}
+
+let pendingRender = false;
+
+function renderBoard(force = false) {
     if (!state.loaded) {
         if (state.loadError) return renderFatal(state.loadError);
         return renderLoading("Chargement du classement…");
     }
-    const board = buildLeaderboard(state.students, state.category);
-    const accountOpen = !!(document.getElementById("account") && document.getElementById("account").open);
-    const account = document.getElementById("account");
-    const typing = account && account.contains(document.activeElement) && document.activeElement.tagName === "INPUT";
+    // Ne pas refermer une liste de filtre ouverte : la mise à jour attend la fin du choix
+    const active = document.activeElement;
+    if (!force && active && active.tagName === "SELECT" && active.closest(".filters")) {
+        pendingRender = true;
+        return;
+    }
+    pendingRender = false;
+    const focusId = active && root.contains(active) && active.dataset ? active.dataset.fid : null;
+
+    state.filters = sanitizeFilters(state.students, state.filters);
+    const filtered = FILTERS.some((f) => state.filters[f.id]);
+    const students = applyFilters(state.students, state.filters);
+    const board = buildLeaderboard(students, state.category);
     const main = [
         state.loadError ? h("p", { class: "banner", role: "status" }, `Mise à jour impossible pour l'instant (${state.loadError}) — dernières données affichées.`) : null,
         kindTabs(),
-        categoryChips(),
+        categoryChips(students),
+        filterBar(),
         h(
             "section",
             { class: "card" },
             h(
                 "div",
                 { class: "board-head" },
-                h("div", null, h("h2", null, state.category.kind === "general" ? state.category.name : `${state.category.code} — ${state.category.name}`), h("p", { class: "hint", dataset: { testid: "count" } }, `${board.count} étudiant${board.count > 1 ? "s" : ""} classé${board.count > 1 ? "s" : ""} · mis à jour à ${state.lastUpdate.toLocaleTimeString("fr-FR")}`))
+                h("div", null, h("h2", null, state.category.kind === "general" ? state.category.name : `${state.category.code} — ${state.category.name}`), h("p", { class: "hint", dataset: { testid: "count" } }, `${board.count} étudiant${board.count > 1 ? "s" : ""} classé${board.count > 1 ? "s" : ""}${filtered ? " dans la sélection" : ""} · mis à jour à ${state.lastUpdate.toLocaleTimeString("fr-FR")}`))
             ),
-            positionCard(board),
-            boardList(board)
+            positionCard(board, filtered),
+            boardList(board, filtered)
         ),
-        summarySection()
-    ];
-    if (typing) {
-        // Ne pas remplacer le formulaire en cours de saisie : on ne met à jour que le classement
-        while (root.firstChild && root.firstChild !== account) root.firstChild.remove();
-        account.before(...main.filter(Boolean));
-        return;
+        summarySection(students, filtered)
+    ].filter(Boolean);
+
+    // Le profil reste en place (saisie en cours, focus) : seul le classement est remplacé
+    if (!accountEl) buildAccount();
+    if (accountEl.parentNode !== root) replace(root, main, accountEl);
+    else {
+        while (root.firstChild !== accountEl) root.firstChild.remove();
+        accountEl.before(...main);
     }
-    const nextAccount = accountSection();
-    nextAccount.open = accountOpen;
-    replace(root, main, nextAccount);
+    fillSuggestions();
+    if (focusId) {
+        const target = root.querySelector(`[data-fid="${CSS.escape(focusId)}"]`);
+        if (target) target.focus({ preventScroll: true });
+    }
+    if (dialog.open) renderSheet();
 }
 
 // ---------------------------------------------------------------------------
@@ -450,6 +773,7 @@ async function refresh() {
         state.loaded = true;
         state.loadError = null;
         state.lastUpdate = new Date();
+        if (dialog.open) loadSheetGrades();
     } catch (e) {
         if (seq !== refreshSeq) return;
         if (e.kind === "auth") return signedOut();
@@ -489,6 +813,9 @@ function stopBoard() {
     state.students = [];
     state.loaded = false;
     liveEl.hidden = true;
+    accountEl = null;
+    pendingRender = false;
+    if (dialog.open) dialog.close();
 }
 
 async function enter(session) {

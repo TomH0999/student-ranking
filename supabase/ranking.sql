@@ -47,6 +47,36 @@ create table if not exists public.ranking_profiles (
     )
 );
 
+-- Profil étendu (v1.1) : tout est facultatif. Les colonnes sont ajoutées sans toucher aux
+-- lignes existantes : un inscrit de la v1.0 garde exactement son affichage.
+alter table public.ranking_profiles
+    add column if not exists first_name          text,
+    add column if not exists last_name           text,
+    add column if not exists name_mode           text    not null default 'pseudo',
+    add column if not exists student_number      text,
+    add column if not exists origin              text,
+    add column if not exists class_name          text,
+    add column if not exists td_group            text,
+    add column if not exists track               text,
+    add column if not exists show_origin         boolean not null default true,
+    add column if not exists show_class          boolean not null default true,
+    add column if not exists show_td_group       boolean not null default true,
+    add column if not exists show_track          boolean not null default true,
+    add column if not exists show_student_number boolean not null default false,
+    add column if not exists show_grades         boolean not null default false;
+
+alter table public.ranking_profiles drop constraint if exists ranking_profiles_details_check;
+alter table public.ranking_profiles add constraint ranking_profiles_details_check check (
+    name_mode in ('pseudo', 'real')
+    and (first_name is null or (char_length(first_name) between 1 and 30 and first_name = btrim(first_name) and first_name !~ '[[:cntrl:]]' and first_name !~* '^(é|e)tudiant'))
+    and (last_name is null or (char_length(last_name) between 1 and 30 and last_name = btrim(last_name) and last_name !~ '[[:cntrl:]]'))
+    and (student_number is null or student_number ~ '^[0-9A-Za-z]{1,20}$')
+    and (origin is null or origin in ('general', 'sti2d', 'autre'))
+    and (class_name is null or (char_length(class_name) between 1 and 16 and class_name = upper(btrim(class_name)) and class_name !~ '[[:cntrl:]]'))
+    and (td_group is null or (char_length(td_group) between 1 and 16 and td_group = upper(btrim(td_group)) and td_group !~ '[[:cntrl:]]'))
+    and (track is null or track in ('racdv', 'dacs', 'aged', 'iamsi', 'indecis', 'autre'))
+);
+
 comment on table public.ranking_profiles is 'Classement : une ligne par étudiant inscrit (pseudo facultatif). Supprimer la ligne = quitter le classement.';
 
 create unique index if not exists ranking_profiles_name_key on public.ranking_profiles (lower(display_name));
@@ -78,7 +108,10 @@ revoke all on table public.ranking_profiles from public;
 revoke all on table public.ranking_profiles from anon;
 revoke all on table public.ranking_profiles from authenticated;
 grant select, insert, delete on table public.ranking_profiles to authenticated;
-grant update (display_name) on table public.ranking_profiles to authenticated;
+grant update (
+    display_name, first_name, last_name, name_mode, student_number, origin, class_name, td_group, track,
+    show_origin, show_class, show_td_group, show_track, show_student_number, show_grades
+) on table public.ranking_profiles to authenticated;
 
 -- -----------------------------------------------------------------------------
 -- 2. Signal temps réel : une seule ligne, lisible par tout compte connecté.
@@ -196,6 +229,11 @@ $$;
 --
 -- Renvoie une ligne par participant ayant au moins une moyenne, et rien du tout si
 -- l'appelant n'est pas lui-même inscrit.
+--
+-- Profil : chaque information n'est renvoyée que si son propriétaire a choisi de
+-- l'afficher (colonnes show_*), y compris pour sa propre ligne : on voit ce que
+-- les autres voient. Les colonnes ajoutées en fin de résultat sont ignorées par
+-- les anciennes versions du site.
 -- -----------------------------------------------------------------------------
 drop function if exists public.ranking_snapshot();
 create function public.ranking_snapshot()
@@ -205,7 +243,13 @@ returns table (
     is_me            boolean,
     subject_averages jsonb,
     ue_averages      jsonb,
-    general_average  jsonb
+    general_average  jsonb,
+    origin           text,
+    class_name       text,
+    td_group         text,
+    track            text,
+    student_number   text,
+    shares_grades    boolean
 )
 language sql
 stable
@@ -217,7 +261,19 @@ as $$
         select (select auth.uid()) as uid
     ),
     participants as (
-        select p.user_id, p.display_name
+        select
+            p.user_id,
+            coalesce(
+                case when p.name_mode = 'real' then nullif(concat_ws(' ', p.first_name, p.last_name), '') end,
+                p.display_name,
+                'Étudiant ' || upper(substr(md5(p.user_id::text), 1, 4))
+            ) as shown_name,
+            case when p.show_origin then p.origin end as origin,
+            case when p.show_class then p.class_name end as class_name,
+            case when p.show_td_group then p.td_group end as td_group,
+            case when p.show_track then p.track end as track,
+            case when p.show_student_number then p.student_number end as student_number,
+            p.show_grades
         from public.ranking_profiles p
         where exists (
             select 1 from public.ranking_profiles mine, me where mine.user_id = me.uid
@@ -301,11 +357,17 @@ as $$
     )
     select
         substr(md5(p.user_id::text), 1, 12) as student_key,
-        coalesce(p.display_name, 'Étudiant ' || upper(substr(md5(p.user_id::text), 1, 4))) as display_name,
+        p.shown_name as display_name,
         p.user_id = me.uid as is_me,
         (select jsonb_object_agg(sa.code, sa.average) from subject_avg sa where sa.user_id = p.user_id) as subject_averages,
         (select jsonb_object_agg(u.ue, u.average) from ue_avg u where u.user_id = p.user_id) as ue_averages,
-        to_jsonb(g.average) as general_average
+        to_jsonb(g.average) as general_average,
+        p.origin,
+        p.class_name,
+        p.td_group,
+        p.track,
+        p.student_number,
+        p.show_grades as shares_grades
     from participants p
     cross join me
     join general_avg g on g.user_id = p.user_id
@@ -317,3 +379,70 @@ comment on function public.ranking_snapshot() is 'Classement : moyennes (matièr
 revoke all on function public.ranking_snapshot() from public;
 revoke all on function public.ranking_snapshot() from anon;
 grant execute on function public.ranking_snapshot() to authenticated;
+
+-- -----------------------------------------------------------------------------
+-- 4. Détail des notes d'un étudiant (v1.1)
+--
+-- Renvoie les évaluations d'un inscrit UNIQUEMENT s'il a choisi de partager le détail
+-- de ses notes (show_grades), ou s'il s'agit de l'appelant lui-même. L'appelant doit
+-- être inscrit. Mêmes notes que celles retenues pour le calcul des moyennes.
+-- -----------------------------------------------------------------------------
+drop function if exists public.ranking_student_grades(text);
+create function public.ranking_student_grades(p_student_key text)
+returns table (
+    subject_code text,
+    name         text,
+    score        jsonb,
+    max          jsonb,
+    coeff        jsonb
+)
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+    with me as (
+        select (select auth.uid()) as uid
+    ),
+    target as (
+        select p.user_id
+        from public.ranking_profiles p, me
+        where substr(md5(p.user_id::text), 1, 12) = p_student_key
+          and (p.show_grades or p.user_id = me.uid)
+          and exists (select 1 from public.ranking_profiles mine where mine.user_id = me.uid)
+    ),
+    raw as (
+        select
+            i.id::text as id,
+            i.data ->> 'subjectCode' as code,
+            left(coalesce(i.data ->> 'name', ''), 120) as name,
+            i.data -> 'score' as score_json,
+            i.data -> 'max' as max_json,
+            i.data -> 'coeff' as coeff_json,
+            case when jsonb_typeof(i.data -> 'score') = 'number' then (i.data ->> 'score')::numeric end as score,
+            case when jsonb_typeof(i.data -> 'max') = 'number' then (i.data ->> 'max')::numeric end as max,
+            case when jsonb_typeof(i.data -> 'coeff') = 'number' then (i.data ->> 'coeff')::numeric end as coeff,
+            case when jsonb_typeof(i.data -> 'createdAt') = 'number' then (i.data ->> 'createdAt')::numeric else 0 end as created
+        from public.items i
+        join target t on t.user_id = i.user_id
+        where i.collection = 'grades'
+          and i.deleted_at is null
+    )
+    select r.code, r.name, r.score_json, r.max_json, r.coeff_json
+    from raw r
+    where r.score is not null and r.max is not null and r.coeff is not null
+      and r.score between -1000000 and 1000000
+      and r.max > 0 and r.max <= 1000000
+      and r.coeff >= 0 and r.coeff <= 1000000
+      and r.code in (
+          'R1.01', 'R1.02', 'R1.03', 'R1.04', 'R1.05', 'R1.06', 'R1.07', 'R1.08', 'R1.09', 'R1.10', 'R1.11', 'R1.12',
+          'SAE 1.01', 'SAE 1.02', 'SAE 1.03', 'SAE 1.04', 'SAE 1.05', 'SAE 1.06'
+      )
+    order by r.created, r.id collate "C";
+$$;
+
+comment on function public.ranking_student_grades(text) is 'Classement : détail des notes d''un inscrit, seulement s''il a choisi de le partager.';
+
+revoke all on function public.ranking_student_grades(text) from public;
+revoke all on function public.ranking_student_grades(text) from anon;
+grant execute on function public.ranking_student_grades(text) to authenticated;

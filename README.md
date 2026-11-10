@@ -7,6 +7,9 @@ des notes saisies dans le [gestionnaire de scolarité](https://github.com/TomH09
 - les moyennes sont recalculées avec **exactement** les formules et coefficients de l'application ;
 - chaque classement recense tous les inscrits qui ont la moyenne concernée, et se met à jour tout
   seul dès qu'une note change ;
+- un **profil** facultatif (prénom et nom ou pseudo, classe, groupe TD, provenance, parcours visé,
+  n° étudiant, détail des notes) dont chacun choisit ce qui est affiché ;
+- des **filtres** par classe, groupe TD, provenance et parcours visé ;
 - le gestionnaire de scolarité n'est **pas modifié** : le classement lit le même projet Supabase.
 
 Site : <https://tomh0999.github.io/student-ranking/>
@@ -82,7 +85,8 @@ Pour l'installer comme une application : *Partager → Sur l'écran d'accueil* (
 |---|---|
 | **Générale / UE / Matières** | Choix du classement ; pour les UE et les matières, une pastille par code (en pointillés : personne n'a encore cette moyenne) |
 | **Ma place** | Votre rang sur le nombre de classés, votre moyenne, la moyenne des classés, l'écart avec le premier |
-| **Liste** | Tous les inscrits ayant cette moyenne, du premier au dernier ; votre ligne est surlignée ; un liseré vert signale une moyenne qui vient de changer |
+| **Filtres** | Classe, groupe TD, provenance, parcours visé : le classement et les rangs sont recalculés dans la sélection. Un filtre n'apparaît que si quelqu'un a renseigné l'information |
+| **Liste** | Tous les inscrits ayant cette moyenne, du premier au dernier ; votre ligne est surlignée ; un liseré vert signale une moyenne qui vient de changer. Un clic sur une ligne ouvre la **fiche** de l'étudiant : profil affiché, moyennes et rangs, détail des notes s'il le partage |
 | **Mes classements** | Vos rangs dans toutes les catégories où vous avez une moyenne ; un clic ouvre le classement correspondant |
 | **En direct** (en haut) | Verte : mise à jour instantanée. « Hors direct » : rechargement automatique toutes les 30 secondes |
 
@@ -93,10 +97,23 @@ Pour l'installer comme une application : *Partager → Sur l'écran d'accueil* (
 - deux moyennes identiques à l'affichage (2 décimales) sont **ex æquo** : rangs 1, 2, 2, 4 ;
 - rien ne se saisit ici : pour changer une moyenne, modifiez vos notes dans le gestionnaire.
 
-### Mon compte
+### Mon profil
 
-En bas de page : changer de **pseudo**, **quitter le classement** (vos moyennes disparaissent pour
-les autres, vos notes ne sont pas touchées), **se déconnecter** (déconnecte aussi le gestionnaire sur
+En bas de page. Tout est facultatif et modifiable à tout moment.
+
+| Rubrique | Contenu |
+|---|---|
+| **Identité** | Pseudo, prénom, nom, et le nom affiché dans le classement : pseudo **ou** prénom et nom |
+| **Scolarité** | Classe, groupe TD (les valeurs déjà saisies par d'autres sont proposées), provenance (bac général, STI2D, autre), parcours visé en 2e année (RACDV, DACS, AGED, IAMSI, indécis, autre), n° étudiant |
+| **Ce que les autres voient** | Une case par information. Par défaut : classe, groupe, provenance et parcours affichés ; n° étudiant et détail des notes masqués |
+
+- Une information masquée n'est pas transmise aux autres et ne sert pas aux filtres.
+- **Le détail de mes notes** : si vous cochez cette case, les autres inscrits voient chacune de vos
+  évaluations (nom, note, barème, coefficient) dans votre fiche. Sinon, ils ne voient que vos moyennes.
+- Votre fiche (clic sur votre ligne) montre ce que les autres voient de vous.
+
+Au même endroit : **quitter le classement** (vos moyennes et votre profil disparaissent pour les
+autres, vos notes ne sont pas touchées) et **se déconnecter** (déconnecte aussi le gestionnaire sur
 cet appareil, les deux sites partageant la même session).
 
 ---
@@ -105,14 +122,26 @@ cet appareil, les deux sites partageant la même session).
 
 - Seules les **moyennes** des étudiants qui ont rejoint le classement sont partagées, et uniquement
   avec les autres inscrits. Sans inscription, on ne voit rien et on n'apparaît nulle part.
-- Les notes détaillées, l'adresse e-mail et l'identifiant du compte ne quittent jamais la base.
+- Les informations de profil ne sont partagées que si leur propriétaire les affiche.
+- Les notes détaillées ne quittent la base que pour les étudiants qui ont choisi de les partager.
+  L'adresse e-mail et l'identifiant du compte ne la quittent jamais.
 - Les notes sont déclaratives : chacun saisit les siennes, le classement ne vérifie rien.
+
+## Mettre à jour une installation existante
+
+Dans cet ordre, pour que rien ne soit interrompu :
+
+1. **Supabase d'abord** : réexécutez [`supabase/ranking.sql`](supabase/ranking.sql) dans le SQL Editor.
+   Le script ajoute ce qui manque sans toucher aux inscrits ni aux pseudos, et le site de la version
+   précédente continue de fonctionner avec la base mise à jour.
+2. **Le site ensuite** : publiez la nouvelle version sur la branche `main`.
 
 ## Dépannage
 
 | Message | Cause | Que faire |
 |---|---|---|
 | « Le classement n'est pas encore installé… » | Étape 1 non faite | Exécuter `supabase/ranking.sql` |
+| « Le classement installé sur Supabase est plus ancien que ce site… » | Site mis à jour avant la base | Réexécuter `supabase/ranking.sql` |
 | « Adresse e-mail ou mot de passe incorrect. » | Compte inexistant ou faute de frappe | Créer le compte dans le gestionnaire |
 | « Adresse e-mail non confirmée… » | Lien de confirmation non ouvert | Ouvrir l'e-mail reçu à l'inscription |
 | Pastille « Hors direct » en permanence | Realtime indisponible ou projet en pause | Tableau de bord Supabase → *Restore project* ; le classement continue par rechargement |

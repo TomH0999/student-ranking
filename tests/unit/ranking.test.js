@@ -33,10 +33,10 @@ describe("normalizeSnapshot", () => {
             null,
             "texte"
         ];
-        expect(normalizeSnapshot(rows)).toEqual([
-            { key: "a", name: "Alice", isMe: true, general: 12.5, ues: { "UE 1.1": 12.5 }, subjects: { "R1.01": 12.5 } },
-            { key: "b", name: "Étudiant", isMe: false, general: 9, ues: {}, subjects: {} }
-        ]);
+        const students = normalizeSnapshot(rows);
+        expect(students).toHaveLength(2);
+        expect(students[0]).toMatchObject({ key: "a", name: "Alice", isMe: true, general: 12.5, ues: { "UE 1.1": 12.5 }, subjects: { "R1.01": 12.5 } });
+        expect(students[1]).toMatchObject({ key: "b", name: "Étudiant", isMe: false, general: 9, ues: {}, subjects: {} });
         expect(normalizeSnapshot(null)).toEqual([]);
         expect(normalizeSnapshot({})).toEqual([]);
     });
@@ -125,5 +125,96 @@ describe("affichage et saisie", () => {
         expect(validateDisplayName("x".repeat(25)).ok).toBe(false);
         expect(validateDisplayName("étudiant 1234").ok).toBe(false);
         expect(validateDisplayName("Etudiant").ok).toBe(false);
+    });
+});
+
+describe("profil, filtres et détail des notes (v1.1)", () => {
+    const rows = [
+        { student_key: "a", display_name: "Alice", is_me: true, general_average: 12, origin: "sti2d", class_name: "S1A", td_group: "TD2", track: "racdv", student_number: null, shares_grades: true },
+        { student_key: "b", display_name: "Bob", general_average: 14, origin: "general", class_name: "S1A", td_group: "TD10", track: null, student_number: "22104567", shares_grades: false },
+        { student_key: "c", display_name: "Chloé", general_average: 16, origin: "inconnu", class_name: "S1B", td_group: " ", track: "dacs" },
+        { student_key: "d", display_name: "Ancien site", general_average: 9 }
+    ];
+
+    it("normalizeSnapshot lit le profil, écarte les valeurs inconnues et reste compatible avec la v1.0", async () => {
+        const { normalizeSnapshot: norm } = await import("../../js/ranking.js");
+        const s = norm(rows);
+        expect(s[0]).toMatchObject({ origin: "sti2d", className: "S1A", tdGroup: "TD2", track: "racdv", studentNumber: null, sharesGrades: true });
+        expect(s[1]).toMatchObject({ studentNumber: "22104567", sharesGrades: false, track: null });
+        expect(s[2]).toMatchObject({ origin: null, tdGroup: null, track: "dacs" });
+        expect(s[3]).toMatchObject({ origin: null, className: null, tdGroup: null, track: null, studentNumber: null, sharesGrades: false });
+    });
+
+    it("filterOptions : valeurs présentes, effectifs, tri naturel et libellés", async () => {
+        const m = await import("../../js/ranking.js");
+        const s = m.normalizeSnapshot(rows);
+        const byId = Object.fromEntries(m.FILTERS.map((f) => [f.id, f]));
+        expect(m.filterOptions(s, byId.className)).toEqual([{ value: "S1A", count: 2, label: "S1A" }, { value: "S1B", count: 1, label: "S1B" }]);
+        expect(m.filterOptions(s, byId.tdGroup).map((o) => o.value)).toEqual(["TD2", "TD10"]);
+        expect(m.filterOptions(s, byId.origin).map((o) => o.label)).toEqual(["Bac général", "STI2D"]);
+        expect(m.filterOptions(s, byId.track).map((o) => o.label)).toEqual(["DACS", "RACDV"]);
+        expect(m.filterOptions([], byId.className)).toEqual([]);
+    });
+
+    it("applyFilters combine les filtres ; un profil masqué ne correspond à aucune valeur", async () => {
+        const m = await import("../../js/ranking.js");
+        const s = m.normalizeSnapshot(rows);
+        expect(m.applyFilters(s, {})).toBe(s);
+        expect(m.applyFilters(s, { className: "S1A" }).map((x) => x.name)).toEqual(["Alice", "Bob"]);
+        expect(m.applyFilters(s, { className: "S1A", origin: "sti2d" }).map((x) => x.name)).toEqual(["Alice"]);
+        expect(m.applyFilters(s, { track: "racdv", className: "S1B" })).toEqual([]);
+        const board = m.buildLeaderboard(m.applyFilters(s, { className: "S1A" }), m.GENERAL);
+        expect(board.rows.map((r) => [r.rank, r.student.name])).toEqual([[1, "Bob"], [2, "Alice"]]);
+        expect(board.mine.rank).toBe(2);
+    });
+
+    it("sanitizeFilters oublie les valeurs qui n'existent plus", async () => {
+        const m = await import("../../js/ranking.js");
+        const s = m.normalizeSnapshot(rows);
+        expect(m.sanitizeFilters(s, { className: "S1A", origin: "autre", inconnu: "x", track: "" })).toEqual({ className: "S1A" });
+        expect(m.sanitizeFilters(s, null)).toEqual({});
+    });
+
+    it("profileTags et libellés", async () => {
+        const m = await import("../../js/ranking.js");
+        const s = m.normalizeSnapshot(rows);
+        expect(m.profileTags(s[0])).toEqual(["S1A", "TD2", "STI2D", "RACDV"]);
+        expect(m.profileTags(s[3])).toEqual([]);
+        expect(m.originLabel("autre")).toBe("Autre");
+        expect(m.trackLabel("nimporte")).toBeNull();
+    });
+
+    it("validateProfile : normalise, met les vides à null, applique les règles de la base", async () => {
+        const { validateProfile } = await import("../../js/ranking.js");
+        const ok = validateProfile({ displayName: " Tom ", firstName: " Tom ", lastName: "", nameMode: "real", studentNumber: "22 10 45", origin: "sti2d", className: " s1a ", tdGroup: "td2", track: "", showClass: false, showGrades: true });
+        expect(ok.ok).toBe(true);
+        expect(ok.value).toEqual({
+            displayName: "Tom", firstName: "Tom", lastName: null, nameMode: "real", studentNumber: "221045", origin: "sti2d", className: "S1A", tdGroup: "TD2", track: null,
+            showOrigin: true, showClass: false, showTdGroup: true, showTrack: true, showStudentNumber: false, showGrades: true
+        });
+        expect(validateProfile({}).value).toMatchObject({ displayName: null, firstName: null, nameMode: "pseudo", origin: null, showStudentNumber: false, showGrades: false, showOrigin: true });
+        expect(validateProfile({ nameMode: "real" }).errors.nameMode).toBeTruthy();
+        expect(validateProfile({ displayName: "x" }).errors.displayName).toBeTruthy();
+        expect(validateProfile({ studentNumber: "12-34" }).errors.studentNumber).toBeTruthy();
+        expect(validateProfile({ className: "x".repeat(17) }).errors.className).toBeTruthy();
+        expect(validateProfile({ firstName: "Étudiant" }).errors.firstName).toBeTruthy();
+        expect(validateProfile({ origin: "pirate", track: "pirate" }).value).toMatchObject({ origin: null, track: null });
+    });
+
+    it("groupGrades regroupe par matière dans l'ordre du programme et écarte l'invalide", async () => {
+        const { groupGrades, formatNumber } = await import("../../js/ranking.js");
+        const grouped = groupGrades([
+            { subject_code: "SAE 1.01", name: "Projet", score: 16, max: 20, coeff: 1 },
+            { subject_code: "R1.01", name: "", score: 8, max: 10, coeff: 0.5 },
+            { subject_code: "R1.01", name: "TP", score: 14.5, max: 20, coeff: 2 },
+            { subject_code: "R1.01", name: "Cassé", score: "x", max: 20, coeff: 1 },
+            { subject_code: "X9.99", name: "Inconnue", score: 1, max: 20, coeff: 1 },
+            null
+        ]);
+        expect(grouped.map((g) => [g.code, g.grades.map((x) => x.name)])).toEqual([["R1.01", ["Évaluation", "TP"]], ["SAE 1.01", ["Projet"]]]);
+        expect(groupGrades(null)).toEqual([]);
+        expect(formatNumber(14.5)).toBe("14,5");
+        expect(formatNumber(20)).toBe("20");
+        expect(formatNumber(0.25)).toBe("0,25");
     });
 });

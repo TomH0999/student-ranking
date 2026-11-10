@@ -26,7 +26,13 @@ function mapError(error) {
         return new RankingError("not-installed", "Le classement n'est pas encore installé sur ce projet Supabase (exécutez supabase/ranking.sql, voir le README).");
     }
     if (code === "23505") return new RankingError("name-taken", "Ce pseudo est déjà pris.");
-    if (code === "23514") return new RankingError("name-invalid", "Pseudo refusé (2 à 24 caractères, sans « Étudiant » au début).");
+    if (code === "23514") {
+        if (/ranking_profiles_details_check/.test(message)) return new RankingError("profile-invalid", "Une information du profil a été refusée. Vérifiez les champs.");
+        return new RankingError("name-invalid", "Pseudo refusé (2 à 24 caractères, sans « Étudiant » au début).");
+    }
+    if (code === "42703" || code === "PGRST204") {
+        return new RankingError("not-installed", "Le classement installé sur Supabase est plus ancien que ce site : réexécutez supabase/ranking.sql (voir le README).");
+    }
     if (code === "invalid_credentials" || /invalid login credentials/i.test(message)) {
         return new RankingError("auth", "Adresse e-mail ou mot de passe incorrect.");
     }
@@ -37,6 +43,37 @@ function mapError(error) {
         return new RankingError("auth", "Session expirée : reconnectez-vous.");
     }
     return new RankingError("server", message || "Erreur du serveur.");
+}
+
+/** Colonnes du profil ↔ champs utilisés par l'interface. */
+const PROFILE_COLUMNS = {
+    displayName: "display_name",
+    firstName: "first_name",
+    lastName: "last_name",
+    nameMode: "name_mode",
+    studentNumber: "student_number",
+    origin: "origin",
+    className: "class_name",
+    tdGroup: "td_group",
+    track: "track",
+    showOrigin: "show_origin",
+    showClass: "show_class",
+    showTdGroup: "show_td_group",
+    showTrack: "show_track",
+    showStudentNumber: "show_student_number",
+    showGrades: "show_grades"
+};
+
+function toProfile(row) {
+    const profile = {};
+    for (const [field, column] of Object.entries(PROFILE_COLUMNS)) profile[field] = row[column] === undefined ? null : row[column];
+    return profile;
+}
+
+function toRow(profile) {
+    const row = {};
+    for (const [field, column] of Object.entries(PROFILE_COLUMNS)) if (field in profile) row[column] = profile[field];
+    return row;
 }
 
 const toSession = (s) => (s && s.user ? { userId: s.user.id, email: s.user.email || "" } : null);
@@ -90,8 +127,8 @@ export function createApi(config, supabaseLib = globalThis.supabase) {
 
         /** Profil de l'utilisateur connecté, ou null s'il n'est pas inscrit au classement. */
         async fetchProfile(userId) {
-            const row = await run(client.from("ranking_profiles").select("display_name").eq("user_id", userId).maybeSingle());
-            return row ? { displayName: row.display_name } : null;
+            const row = await run(client.from("ranking_profiles").select(Object.values(PROFILE_COLUMNS).join(",")).eq("user_id", userId).maybeSingle());
+            return row ? toProfile(row) : null;
         },
 
         /**
@@ -100,14 +137,20 @@ export function createApi(config, supabaseLib = globalThis.supabase) {
          */
         async join(userId, displayName) {
             const { error } = await client.from("ranking_profiles").insert({ user_id: userId, display_name: displayName });
-            if (!error) return { displayName };
-            if (String(error.code) === "23505" && /ranking_profiles_pkey/.test(String(error.message))) return this.rename(userId, displayName);
-            throw mapError(error);
+            if (error && !(String(error.code) === "23505" && /ranking_profiles_pkey/.test(String(error.message)))) throw mapError(error);
+            if (error) await this.saveProfile(userId, { displayName });
+            return this.fetchProfile(userId);
         },
 
-        async rename(userId, displayName) {
-            await run(client.from("ranking_profiles").update({ display_name: displayName }).eq("user_id", userId));
-            return { displayName };
+        /** Enregistre tout ou partie du profil, puis renvoie le profil tel qu'il est en base. */
+        async saveProfile(userId, profile) {
+            await run(client.from("ranking_profiles").update(toRow(profile)).eq("user_id", userId));
+            return this.fetchProfile(userId);
+        },
+
+        /** Détail des notes d'un étudiant : vide s'il ne le partage pas. */
+        async studentGrades(studentKey) {
+            return run(client.rpc("ranking_student_grades", { p_student_key: studentKey }));
         },
 
         async leave(userId) {

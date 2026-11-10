@@ -99,7 +99,7 @@ test("temps réel : une note modifiée ailleurs met le classement à jour sans r
     await page.evaluate(() => {
         window.__fake.students.find((s) => s.owner === "tom").general = 16.8;
         window.__fake.students.push({ owner: "ines", general: 17, ues: {}, subjects: {} });
-        window.__fake.profiles.set("ines", "Inès");
+        window.__fake.setProfile("ines", { display_name: "Inès" });
         window.__fake.pulse();
     });
 
@@ -161,30 +161,30 @@ test("premier passage : rejoindre le classement avec un pseudo, puis le changer"
     await expect(page.locator(".row.me")).toContainText("Étudiant NEWB");
     await expect(page.getByTestId("my-rank")).toHaveText("4e / 5");
 
-    await page.getByText("Mon compte").click();
-    await page.getByLabel("Pseudo affiché").fill("Nouvelle");
+    await page.getByText("Mon profil", { exact: true }).click();
+    await page.getByLabel("Pseudo", { exact: true }).fill("Nouvelle");
     await page.getByRole("button", { name: "Enregistrer" }).click();
     await expect(page.locator(".row.me")).toContainText("Nouvelle");
 });
 
 test("une mise à jour en direct n'efface pas le pseudo en cours de saisie", async ({ page }) => {
     await open(page, { session: asTom });
-    await page.getByText("Mon compte").click();
-    await page.getByLabel("Pseudo affiché").fill("En cours de frappe");
+    await page.getByText("Mon profil", { exact: true }).click();
+    await page.getByLabel("Pseudo", { exact: true }).fill("En cours de frappe");
     await page.evaluate(() => {
         window.__fake.students.find((s) => s.owner === "tom").general = 19.5;
         window.__fake.pulse();
     });
     await expect(page.getByTestId("my-rank")).toHaveText("1er / 4");
-    await expect(page.getByLabel("Pseudo affiché")).toHaveValue("En cours de frappe");
-    await expect(page.getByLabel("Pseudo affiché")).toBeFocused();
+    await expect(page.getByLabel("Pseudo", { exact: true })).toHaveValue("En cours de frappe");
+    await expect(page.getByLabel("Pseudo", { exact: true })).toBeFocused();
     await expect(page.locator(".tabs")).toHaveCount(1);
     await expect(page.locator(".board")).toHaveCount(1);
 });
 
 test("quitter le classement, puis se déconnecter", async ({ page }) => {
     await open(page, { session: asTom });
-    await page.getByText("Mon compte").click();
+    await page.getByText("Mon profil", { exact: true }).click();
     page.once("dialog", (dialog) => dialog.accept());
     await page.getByRole("button", { name: "Quitter le classement" }).click();
     await expect(page.getByRole("heading", { name: "Rejoindre le classement" })).toBeVisible();
@@ -225,7 +225,7 @@ test("un pseudo ne peut pas injecter de HTML ; aucune erreur ni violation CSP", 
     await expect(rows(page).nth(1)).toContainText("<img src=x onerror=alert(1)>");
     await expect(page.locator(".board img")).toHaveCount(0);
     await page.getByRole("button", { name: "Matières" }).click();
-    await page.getByText("Mon compte").click();
+    await page.getByText("Mon profil", { exact: true }).click();
     expect(problems).toEqual([]);
 });
 
@@ -243,8 +243,197 @@ test("déjà inscrit depuis un autre appareil : rejoindre met simplement le pseu
     await page.getByLabel("Mot de passe").fill("secret-new");
     await page.getByRole("button", { name: "Se connecter" }).click();
     await expect(page.getByRole("heading", { name: "Rejoindre le classement" })).toBeVisible();
-    await page.evaluate(() => window.__fake.profiles.set("newbie", null));
+    await page.evaluate(() => window.__fake.setProfile("newbie", {}));
     await page.getByLabel("Pseudo (facultatif)").fill("Depuis ailleurs");
     await page.getByRole("button", { name: "Rejoindre le classement" }).click();
     await expect(page.locator(".row.me")).toContainText("Depuis ailleurs");
+});
+
+// ---------------------------------------------------------------------------
+// v1.1 : profil personnalisable, filtres, fiche d'un étudiant
+// ---------------------------------------------------------------------------
+const RICH_PROFILES = {
+    tom: { display_name: "Tom", origin: "sti2d", class_name: "S1A", td_group: "TD2", track: "racdv" },
+    lea: { display_name: "Léa", origin: "general", class_name: "S1A", td_group: "TD1", track: "dacs", show_grades: true, student_number: "22104567", show_student_number: true },
+    max: null,
+    zoe: { display_name: "Zoé", origin: "general", class_name: "S1B", td_group: "TD3", show_origin: false }
+};
+const RICH_STUDENTS = STUDENTS.map((s) =>
+    s.owner === "lea"
+        ? { ...s, grades: [{ subject_code: "R1.01", name: "Partiel", score: 15.5, max: 20, coeff: 2 }, { subject_code: "R1.01", name: "TP noté", score: 7.75, max: 10, coeff: 1 }] }
+        : s.owner === "tom"
+          ? { ...s, grades: [{ subject_code: "SAE 1.01", name: "Soutenance", score: 12, max: 20, coeff: 1 }] }
+          : s
+);
+const rich = { session: asTom, profiles: RICH_PROFILES, students: RICH_STUDENTS };
+
+test("un profil non renseigné s'affiche exactement comme avant (aucune étiquette, aucun filtre)", async ({ page }) => {
+    await open(page, { session: asTom });
+    await expect(rows(page)).toHaveCount(4);
+    await expect(page.locator(".tags")).toHaveCount(0);
+    await expect(page.locator(".filters")).toHaveCount(0);
+});
+
+test("les informations de profil affichées apparaissent sous le nom", async ({ page }) => {
+    await open(page, rich);
+    await expect(rows(page)).toHaveCount(4);
+    await expect(rows(page).nth(1).locator(".tags")).toHaveText("S1A · TD1 · Bac général · DACS");
+    await expect(rows(page).nth(0).locator(".tags")).toHaveText("S1B · TD3"); // provenance masquée
+    await expect(rows(page).nth(3).locator(".tags")).toHaveCount(0);
+});
+
+test("filtrer par classe et par provenance : rangs recalculés dans la sélection", async ({ page }) => {
+    await open(page, rich);
+    await expect(page.getByTestId("my-rank")).toHaveText("3e / 4");
+
+    await page.locator("#filter-className").selectOption("S1A");
+    expect((await rowTexts(page)).map((t) => t.split(" ").slice(0, 2).join(" "))).toEqual(["1 Léa", "2 Tom"]);
+    await expect(page.getByTestId("my-rank")).toHaveText("2e / 2");
+    await expect(page.getByTestId("count")).toContainText("2 étudiants classés dans la sélection");
+    await expect(page.locator(".summary-row").first()).toContainText("2e / 2");
+
+    await page.locator("#filter-origin").selectOption("general");
+    expect((await rowTexts(page)).map((t) => t.split(" ").slice(0, 2).join(" "))).toEqual(["1 Léa"]);
+    await expect(page.getByText("Vous ne faites pas partie de la sélection affichée")).toBeVisible();
+
+    // Zoé masque sa provenance : elle n'est pas proposée par ce filtre
+    await expect(page.locator("#filter-origin option")).toHaveText(["Toutes les provenances", "Bac général (1)", "STI2D (1)"]);
+
+    // Le choix est mémorisé, puis effaçable
+    await page.reload();
+    await expect(rows(page)).toHaveCount(1);
+    await page.getByRole("button", { name: "Tout afficher" }).click();
+    await expect(rows(page)).toHaveCount(4);
+    await expect(page.getByTestId("my-rank")).toHaveText("3e / 4");
+});
+
+test("un filtre dont la valeur disparaît est abandonné tout seul", async ({ page }) => {
+    await open(page, rich);
+    await page.locator("#filter-className").selectOption("S1B");
+    await expect(rows(page)).toHaveCount(1);
+    await page.locator("#filter-className").blur();
+    await page.evaluate(() => {
+        window.__fake.setProfile("zoe", { show_class: false });
+        window.__fake.pulse();
+    });
+    await expect(rows(page)).toHaveCount(4);
+    await expect(page.locator("#filter-className")).toHaveValue("");
+});
+
+test("compléter son profil et choisir ce qui est affiché", async ({ page }) => {
+    await open(page, { session: asTom });
+    await page.getByText("Mon profil", { exact: true }).click();
+    await page.locator("#first-name").fill("Tom");
+    await page.locator("#last-name").fill("Durand");
+    await page.getByLabel("Mon prénom et mon nom").check();
+    await page.locator("#class-name").fill("s1a");
+    await page.locator("#td-group").fill("td2");
+    await page.locator("#origin").selectOption("sti2d");
+    await page.locator("#track").selectOption("racdv");
+    await page.locator("#student-number").fill("22 10 45 67");
+    await page.locator("input[name=showTdGroup]").uncheck();
+    await page.getByLabel("Le détail de mes notes").check();
+    await page.getByRole("button", { name: "Enregistrer" }).click();
+
+    await expect(page.getByText("Profil enregistré")).toBeVisible();
+    await expect(page.locator(".row.me")).toContainText("Tom Durand");
+    await expect(page.locator(".row.me .tags")).toHaveText("S1A · STI2D · RACDV");
+    const saved = await page.evaluate(() => window.__fake.profiles.get("tom"));
+    expect(saved).toMatchObject({
+        first_name: "Tom", last_name: "Durand", name_mode: "real", class_name: "S1A", td_group: "TD2", origin: "sti2d", track: "racdv",
+        student_number: "22104567", show_td_group: false, show_student_number: false, show_grades: true, show_class: true
+    });
+    // Le formulaire reste ouvert et reflète ce qui est enregistré
+    await expect(page.locator("#class-name")).toHaveValue("S1A");
+    await expect(page.locator("input[name=showTdGroup]")).not.toBeChecked();
+
+    // Erreur de saisie : rien n'est envoyé
+    await page.locator("#student-number").fill("12-34");
+    await page.getByRole("button", { name: "Enregistrer" }).click();
+    await expect(page.locator("#account").getByRole("alert")).toHaveText("N° étudiant invalide (lettres et chiffres, 20 maximum).");
+});
+
+test("une mise à jour en direct ne touche ni au profil en cours de saisie ni au focus", async ({ page }) => {
+    await open(page, rich);
+    await page.getByText("Mon profil", { exact: true }).click();
+    await page.locator("#first-name").fill("Pas encore enregistré");
+    await page.getByLabel("Le détail de mes notes").check();
+    await page.locator("#last-name").focus();
+    await page.evaluate(() => {
+        window.__fake.students.find((s) => s.owner === "tom").general = 19.5;
+        window.__fake.pulse();
+    });
+    await expect(page.getByTestId("my-rank")).toHaveText("1er / 4");
+    await expect(page.locator("#first-name")).toHaveValue("Pas encore enregistré");
+    await expect(page.getByLabel("Le détail de mes notes")).toBeChecked();
+    await expect(page.locator("#last-name")).toBeFocused();
+    await expect(page.locator("#account")).toHaveCount(1);
+
+    // Focus au clavier dans le classement : conservé après une mise à jour
+    await rows(page).nth(2).focus();
+    await page.evaluate(() => window.__fake.pulse());
+    await page.waitForTimeout(600);
+    await expect(rows(page).nth(2)).toBeFocused();
+});
+
+test("fiche d'un étudiant : profil affiché, moyennes et rangs, détail des notes s'il est partagé", async ({ page }) => {
+    await open(page, rich);
+    await rows(page).nth(1).click();
+    const sheet = page.locator("dialog.sheet");
+    await expect(sheet.getByRole("heading", { name: "Léa" })).toBeVisible();
+    await expect(sheet.locator(".facts")).toContainText("ClasseS1A");
+    await expect(sheet.locator(".facts")).toContainText("N° étudiant22104567");
+    await expect(sheet.locator(".summary.static li")).toHaveCount(3);
+    await expect(sheet.locator(".summary.static li").first()).toContainText("2e / 4");
+    await expect(sheet.locator(".grades li")).toHaveText(["Partielcoeff. 215,5 / 20", "TP notécoeff. 17,75 / 10"]);
+
+    // Mise à jour en direct pendant que la fiche est ouverte
+    await page.evaluate(() => {
+        window.__fake.students.find((s) => s.owner === "lea").grades.push({ subject_code: "R1.02", name: "Maquette", score: 18, max: 20, coeff: 1 });
+        window.__fake.pulse();
+    });
+    await expect(sheet.locator(".grades li")).toHaveCount(3);
+
+    // Elle cesse de partager : le détail disparaît
+    await page.evaluate(() => {
+        window.__fake.setProfile("lea", { show_grades: false });
+        window.__fake.pulse();
+    });
+    await expect(sheet.getByText("Cet étudiant ne partage pas le détail de ses notes.")).toBeVisible();
+    await expect(sheet.locator(".grades")).toHaveCount(0);
+    await sheet.getByRole("button", { name: "Fermer la fiche" }).click();
+    await expect(sheet).toBeHidden();
+});
+
+test("fiche : sans partage, aucune note n'est demandée ; ma propre fiche montre mes notes à moi seul", async ({ page }) => {
+    await open(page, rich);
+    await rows(page).nth(0).click();
+    const sheet = page.locator("dialog.sheet");
+    await expect(sheet.getByText("Cet étudiant ne partage pas le détail de ses notes.")).toBeVisible();
+    await expect(sheet.locator(".facts")).not.toContainText("Provenance");
+    expect(await page.evaluate(() => window.__fake.calls.grades)).toBe(0);
+    await page.keyboard.press("Escape");
+    await expect(sheet).toBeHidden();
+
+    await page.locator(".row.me").click();
+    await expect(sheet.getByText("Visible par vous seul")).toBeVisible();
+    await expect(sheet.locator(".grades li")).toHaveText(["Soutenancecoeff. 112 / 20"]);
+});
+
+test("nouveautés : pas de défilement horizontal, aucune erreur ni violation CSP", async ({ page }) => {
+    const problems = [];
+    page.on("console", (m) => {
+        if (m.type() === "error") problems.push(m.text());
+    });
+    page.on("pageerror", (e) => problems.push(String(e)));
+    await open(page, rich);
+    await page.locator("#filter-className").selectOption("S1A");
+    await page.getByText("Mon profil", { exact: true }).click();
+    const overflow = () => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    expect(await overflow()).toBeLessThanOrEqual(0);
+    await rows(page).nth(0).click();
+    await expect(page.locator("dialog.sheet")).toBeVisible();
+    const sheetOverflow = await page.locator("dialog.sheet").evaluate((d) => d.scrollWidth - d.clientWidth);
+    expect(sheetOverflow).toBeLessThanOrEqual(0);
+    expect(problems).toEqual([]);
 });
