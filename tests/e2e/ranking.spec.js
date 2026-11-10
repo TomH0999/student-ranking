@@ -56,7 +56,7 @@ test("connexion, puis classement général avec ma place", async ({ page }) => {
 
     await expect(page.getByRole("heading", { name: "Moyenne générale" })).toBeVisible();
     await expect(rows(page)).toHaveCount(4);
-    expect(await rowTexts(page)).toEqual(["1 Zoé 18.20", "2 Léa 15.10", "3 Tom MOI 13.46", "4 Étudiant MAX 9.75"]);
+    await expect.poll(() => rowTexts(page)).toEqual(["1 Zoé 18.20", "2 Léa 15.10", "3 Tom MOI 13.46", "4 Étudiant MAX 9.75"]);
     await expect(page.getByTestId("my-rank")).toHaveText("3e / 4");
     await expect(page.getByTestId("count")).toContainText("4 étudiants classés");
     await expect(page.locator("#live")).toHaveText("En direct");
@@ -72,10 +72,10 @@ test("classement par UE et par matière : seuls ceux qui ont la moyenne, ex æqu
     await open(page, { session: asTom });
     await page.getByRole("button", { name: "UE", exact: true }).click();
     await expect(page.getByRole("heading", { name: /UE 1\.1 — Réaliser un développement/ })).toBeVisible();
-    expect(await rowTexts(page)).toEqual(["1 Tom MOI 14.20", "2 Léa 13.00", "3 Étudiant MAX 9.75"]);
+    await expect.poll(() => rowTexts(page)).toEqual(["1 Tom MOI 14.20", "2 Léa 13.00", "3 Étudiant MAX 9.75"]);
 
     await page.getByRole("button", { name: "UE 1.3" }).click();
-    expect(await rowTexts(page)).toEqual(["1 Zoé 18.20"]);
+    await expect.poll(() => rowTexts(page)).toEqual(["1 Zoé 18.20"]);
     await expect(page.getByText("Vous n'avez pas encore de moyenne ici")).toBeVisible();
 
     await page.getByRole("button", { name: "UE 1.6" }).click();
@@ -83,7 +83,7 @@ test("classement par UE et par matière : seuls ceux qui ont la moyenne, ex æqu
 
     await page.getByRole("button", { name: "Matières" }).click();
     await expect(page.getByRole("heading", { name: /R1\.01 — Initiation au développement/ })).toBeVisible();
-    expect(await rowTexts(page)).toEqual(["1 Léa 15.50", "1 Tom MOI 15.50", "3 Étudiant MAX 8.00"]);
+    await expect.poll(() => rowTexts(page)).toEqual(["1 Léa 15.50", "1 Tom MOI 15.50", "3 Étudiant MAX 8.00"]);
     await expect(page.getByTestId("my-rank")).toHaveText("1er / 3");
     await expect(page.getByText("ex æquo")).toBeVisible();
 
@@ -104,7 +104,7 @@ test("temps réel : une note modifiée ailleurs met le classement à jour sans r
     });
 
     await expect(page.getByTestId("my-rank")).toHaveText("3e / 5");
-    expect(await rowTexts(page)).toEqual(["1 Zoé 18.20", "2 Inès 17.00", "3 Tom MOI 16.80", "4 Léa 15.10", "5 Étudiant MAX 9.75"]);
+    await expect.poll(() => rowTexts(page)).toEqual(["1 Zoé 18.20", "2 Inès 17.00", "3 Tom MOI 16.80", "4 Léa 15.10", "5 Étudiant MAX 9.75"]);
     await expect(page.locator(".row.me.changed")).toHaveCount(1);
 });
 
