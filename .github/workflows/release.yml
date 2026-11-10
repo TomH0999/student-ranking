@@ -1,10 +1,14 @@
 name: Release
 
-# Publie une release GitHub quand une étiquette vX.Y.Z est poussée.
-# Les notes viennent de docs/RELEASE-vX.Y.Z.md.
+# Publie la release GitHub de la version indiquée dans package.json, si elle n'existe
+# pas encore. Les notes viennent de docs/RELEASE-vX.Y.Z.md.
+# Pour une nouvelle version : changer la version (package.json, js/version.js), ajouter
+# le fichier de notes, pousser sur main.
 on:
   push:
-    tags: ["v*"]
+    branches: [main]
+    paths: ["package.json", "docs/RELEASE-*.md", ".github/workflows/release.yml"]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -14,11 +18,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Créer la release
+      - name: Créer la release si elle manque
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
         run: |
-          notes="docs/RELEASE-${TAG}.md"
+          tag="v$(node -p "require('./package.json').version")"
+          notes="docs/RELEASE-${tag}.md"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "La release $tag existe déjà."
+            exit 0
+          fi
           test -f "$notes"
-          gh release create "$TAG" --verify-tag --latest --title "Classement BUT1 ${TAG}" --notes-file "$notes"
+          gh release create "$tag" --target "$GITHUB_SHA" --latest --title "Classement BUT1 ${tag}" --notes-file "$notes"
