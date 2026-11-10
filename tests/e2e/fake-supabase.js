@@ -56,8 +56,11 @@
                     }
                 })
             }),
-            upsert: (row) => {
+            // Comme la vraie base : pas de droit de mise à jour sur user_id, donc l'upsert est refusé
+            upsert: () => fail({ code: "42501", message: "permission denied for table ranking_profiles" }),
+            insert: (row) => {
                 if (!fake.installed) return fail(notInstalled);
+                if (fake.profiles.has(row.user_id)) return fail({ code: "23505", message: 'duplicate key value violates unique constraint "ranking_profiles_pkey"' });
                 const err = nameError(row.user_id, row.display_name);
                 if (err) return fail(err);
                 fake.profiles.set(row.user_id, row.display_name);

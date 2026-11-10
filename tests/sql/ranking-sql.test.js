@@ -173,6 +173,15 @@ describe("participants et confidentialité", () => {
         await expect(asRole(db, alice, (tx) => tx.query("update public.ranking_pulse set version = 0"))).rejects.toThrow(/permission denied/);
     });
 
+    it("inscription par insertion simple ; l'upsert de PostgREST est refusé (seul le pseudo est modifiable)", async () => {
+        const frank = await createUser(db, "frank@example.com");
+        const upsert = "insert into public.ranking_profiles (user_id, display_name) values ($1, $2) on conflict (user_id) do update set user_id = excluded.user_id, display_name = excluded.display_name";
+        await expect(asRole(db, frank, (tx) => tx.query(upsert, [frank, "Frank"]))).rejects.toThrow(/permission denied/);
+        await join(db, frank, "Frank");
+        await expect(join(db, frank, "Frank")).rejects.toThrow(/ranking_profiles_pkey/);
+        await asRole(db, frank, (tx) => tx.query("delete from public.ranking_profiles where user_id = $1", [frank]));
+    });
+
     it("les notes des autres restent illisibles (RLS de l'application intacte)", async () => {
         const r = await asRole(db, alice, (tx) => tx.query("select distinct user_id from public.items"));
         expect(r.rows).toEqual([{ user_id: alice }]);

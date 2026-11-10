@@ -18,6 +18,8 @@ export const UNINSTALL_SQL = read("supabase", "uninstall.sql");
 
 const SUPABASE_EMULATION = `
 set timezone = 'UTC';
+-- Comme sur Supabase : les doubles sont affichés sur 15 chiffres par défaut
+set extra_float_digits = 0;
 create schema if not exists auth;
 create table if not exists auth.users (id uuid primary key, email text unique);
 create or replace function auth.uid() returns uuid language sql stable as $$

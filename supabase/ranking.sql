@@ -191,23 +191,27 @@ $$;
 --   générale: moyenne simple des UE calculées.
 -- Tout est calculé en double précision, dans le même ordre : les résultats sont
 -- identiques au bit près à ceux affichés par l'application (vérifié par les tests).
+-- Les moyennes sont renvoyées en JSON, écrites avec tous leurs chiffres
+-- (extra_float_digits = 1) : par défaut, Supabase tronque les doubles à 15 chiffres.
 --
 -- Renvoie une ligne par participant ayant au moins une moyenne, et rien du tout si
 -- l'appelant n'est pas lui-même inscrit.
 -- -----------------------------------------------------------------------------
-create or replace function public.ranking_snapshot()
+drop function if exists public.ranking_snapshot();
+create function public.ranking_snapshot()
 returns table (
     student_key      text,
     display_name     text,
     is_me            boolean,
     subject_averages jsonb,
     ue_averages      jsonb,
-    general_average  double precision
+    general_average  jsonb
 )
 language sql
 stable
 security definer
 set search_path = ''
+set extra_float_digits = 1
 as $$
     with me as (
         select (select auth.uid()) as uid
@@ -301,7 +305,7 @@ as $$
         p.user_id = me.uid as is_me,
         (select jsonb_object_agg(sa.code, sa.average) from subject_avg sa where sa.user_id = p.user_id) as subject_averages,
         (select jsonb_object_agg(u.ue, u.average) from ue_avg u where u.user_id = p.user_id) as ue_averages,
-        g.average as general_average
+        to_jsonb(g.average) as general_average
     from participants p
     cross join me
     join general_avg g on g.user_id = p.user_id

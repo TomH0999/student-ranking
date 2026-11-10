@@ -94,9 +94,15 @@ export function createApi(config, supabaseLib = globalThis.supabase) {
             return row ? { displayName: row.display_name } : null;
         },
 
+        /**
+         * Insertion simple (pas d'upsert : la base n'autorise la mise à jour que du pseudo).
+         * Déjà inscrit depuis un autre appareil : on met simplement le pseudo à jour.
+         */
         async join(userId, displayName) {
-            await run(client.from("ranking_profiles").upsert({ user_id: userId, display_name: displayName }, { onConflict: "user_id" }));
-            return { displayName };
+            const { error } = await client.from("ranking_profiles").insert({ user_id: userId, display_name: displayName });
+            if (!error) return { displayName };
+            if (String(error.code) === "23505" && /ranking_profiles_pkey/.test(String(error.message))) return this.rename(userId, displayName);
+            throw mapError(error);
         },
 
         async rename(userId, displayName) {

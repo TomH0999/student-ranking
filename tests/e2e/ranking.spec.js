@@ -236,3 +236,15 @@ test("pas de défilement horizontal de la page", async ({ page }) => {
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     expect(overflow).toBeLessThanOrEqual(0);
 });
+
+test("déjà inscrit depuis un autre appareil : rejoindre met simplement le pseudo à jour", async ({ page }) => {
+    await open(page, { students: [...STUDENTS, { owner: "newbie", general: 12, ues: {}, subjects: {} }] });
+    await page.getByLabel("Adresse e-mail").fill("new@example.com");
+    await page.getByLabel("Mot de passe").fill("secret-new");
+    await page.getByRole("button", { name: "Se connecter" }).click();
+    await expect(page.getByRole("heading", { name: "Rejoindre le classement" })).toBeVisible();
+    await page.evaluate(() => window.__fake.profiles.set("newbie", null));
+    await page.getByLabel("Pseudo (facultatif)").fill("Depuis ailleurs");
+    await page.getByRole("button", { name: "Rejoindre le classement" }).click();
+    await expect(page.locator(".row.me")).toContainText("Depuis ailleurs");
+});
