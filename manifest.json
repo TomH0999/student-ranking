@@ -1,0 +1,19 @@
+{
+    "id": "./",
+    "name": "Classement BUT1 Informatique",
+    "short_name": "Classement",
+    "description": "Classement en temps réel des étudiants du BUT1 Informatique : moyennes par matière, par UE et générale.",
+    "lang": "fr",
+    "dir": "ltr",
+    "start_url": "./",
+    "scope": "./",
+    "display": "standalone",
+    "background_color": "#020617",
+    "theme_color": "#0f172a",
+    "categories": ["education"],
+    "icons": [
+        { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+        { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+        { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+    ]
+}

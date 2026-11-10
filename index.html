@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://*.supabase.co wss://*.supabase.co; manifest-src 'self'; base-uri 'self'; form-action 'self'; object-src 'none'">
+    <meta name="description" content="Classement en temps réel des étudiants du BUT1 Informatique : moyennes par matière, par UE et générale.">
+    <title>Classement BUT1 Informatique</title>
+
+    <link rel="manifest" href="manifest.json">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Classement">
+    <meta name="theme-color" content="#0f172a">
+    <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+    <link rel="icon" type="image/svg+xml" href="icon.svg">
+
+    <link rel="stylesheet" href="style.css">
+    <script src="config.js"></script>
+    <script src="assets/vendor/supabase/supabase.js"></script>
+    <script type="module" src="js/main.js"></script>
+</head>
+<body>
+    <header class="top">
+        <div class="top-inner">
+            <img class="logo" src="icon.svg" alt="" width="40" height="40">
+            <div class="top-title">
+                <h1>Classement</h1>
+                <p>BUT1 Informatique · S1</p>
+            </div>
+            <span id="live" class="live" role="status" hidden></span>
+        </div>
+    </header>
+
+    <main id="app">
+        <noscript><p class="card">Cette page nécessite JavaScript.</p></noscript>
+    </main>
+
+    <footer class="foot">
+        <span>Classement BUT1 <span id="version"></span></span>
+        <span>Moyennes calculées comme dans le gestionnaire de scolarité</span>
+    </footer>
+</body>
+</html>

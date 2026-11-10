@@ -1,0 +1,141 @@
+/**
+ * Accès Supabase du classement : session (partagée avec le gestionnaire de scolarité
+ * quand les deux sites sont sur la même origine), profil, moyennes, signal temps réel.
+ * Seule la clé publique est utilisée ; la base applique la RLS.
+ */
+
+/** Même clé de stockage que l'application : connecté là-bas = connecté ici (même origine). */
+export const AUTH_STORAGE_KEY = "gdn-supabase-auth";
+
+export class RankingError extends Error {
+    constructor(kind, message) {
+        super(message);
+        this.kind = kind; // "auth" | "network" | "not-installed" | "name-taken" | "name-invalid" | "server"
+    }
+}
+
+function mapError(error) {
+    if (error instanceof RankingError) return error;
+    const code = error && error.code ? String(error.code) : "";
+    const status = error && error.status;
+    const message = error && error.message ? String(error.message) : String(error);
+    if (/failed to fetch|networkerror|load failed|network request failed/i.test(message)) {
+        return new RankingError("network", "Connexion impossible. Vérifiez votre accès à Internet.");
+    }
+    if (code === "PGRST202" || code === "PGRST205" || code === "42P01" || code === "42883") {
+        return new RankingError("not-installed", "Le classement n'est pas encore installé sur ce projet Supabase (exécutez supabase/ranking.sql, voir le README).");
+    }
+    if (code === "23505") return new RankingError("name-taken", "Ce pseudo est déjà pris.");
+    if (code === "23514") return new RankingError("name-invalid", "Pseudo refusé (2 à 24 caractères, sans « Étudiant » au début).");
+    if (code === "invalid_credentials" || /invalid login credentials/i.test(message)) {
+        return new RankingError("auth", "Adresse e-mail ou mot de passe incorrect.");
+    }
+    if (code === "email_not_confirmed" || /email not confirmed/i.test(message)) {
+        return new RankingError("auth", "Adresse e-mail non confirmée : ouvrez le lien reçu par e-mail.");
+    }
+    if (status === 401 || code === "PGRST301" || /jwt/i.test(message)) {
+        return new RankingError("auth", "Session expirée : reconnectez-vous.");
+    }
+    return new RankingError("server", message || "Erreur du serveur.");
+}
+
+const toSession = (s) => (s && s.user ? { userId: s.user.id, email: s.user.email || "" } : null);
+
+export function createApi(config, supabaseLib = globalThis.supabase) {
+    const client = supabaseLib.createClient(config.supabaseUrl, config.supabaseKey, {
+        auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false, storageKey: AUTH_STORAGE_KEY },
+        realtime: { params: { eventsPerSecond: 10 } }
+    });
+    let channel = null;
+
+    async function run(promise) {
+        let result;
+        try {
+            result = await promise;
+        } catch (e) {
+            throw mapError(e);
+        }
+        if (result.error) throw mapError(result.error);
+        return result.data;
+    }
+
+    return {
+        async getSession() {
+            const data = await run(client.auth.getSession());
+            return toSession(data.session);
+        },
+
+        /** listener(session | null) ; jamais d'appel Supabase dans le rappel lui-même. */
+        onAuthChange(listener) {
+            const { data } = client.auth.onAuthStateChange((event, session) => {
+                setTimeout(() => listener(toSession(session), event), 0);
+            });
+            return () => data.subscription.unsubscribe();
+        },
+
+        async signIn(email, password) {
+            const data = await run(client.auth.signInWithPassword({ email: String(email).trim(), password }));
+            const s = toSession(data.session);
+            if (!s) throw new RankingError("auth", "Connexion impossible.");
+            return s;
+        },
+
+        async signOut() {
+            try {
+                await client.auth.signOut({ scope: "local" });
+            } catch {
+                /* déconnexion locale quoi qu'il arrive */
+            }
+        },
+
+        /** Profil de l'utilisateur connecté, ou null s'il n'est pas inscrit au classement. */
+        async fetchProfile(userId) {
+            const row = await run(client.from("ranking_profiles").select("display_name").eq("user_id", userId).maybeSingle());
+            return row ? { displayName: row.display_name } : null;
+        },
+
+        async join(userId, displayName) {
+            await run(client.from("ranking_profiles").upsert({ user_id: userId, display_name: displayName }, { onConflict: "user_id" }));
+            return { displayName };
+        },
+
+        async rename(userId, displayName) {
+            await run(client.from("ranking_profiles").update({ display_name: displayName }).eq("user_id", userId));
+            return { displayName };
+        },
+
+        async leave(userId) {
+            await run(client.from("ranking_profiles").delete().eq("user_id", userId));
+        },
+
+        async snapshot() {
+            return run(client.rpc("ranking_snapshot"));
+        },
+
+        /** onPulse() à chaque changement du classement ; onState("live" | "connecting" | "offline"). */
+        subscribe(onPulse, onState) {
+            this.unsubscribe();
+            const current = client
+                .channel("ranking-pulse")
+                .on("postgres_changes", { event: "*", schema: "public", table: "ranking_pulse" }, () => onPulse())
+                .subscribe((status) => {
+                    if (current !== channel) return;
+                    if (status === "SUBSCRIBED") onState("live");
+                    else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") onState("offline");
+                    else onState("connecting");
+                });
+            channel = current;
+        },
+
+        unsubscribe() {
+            if (!channel) return;
+            const old = channel;
+            channel = null;
+            try {
+                client.removeChannel(old);
+            } catch {
+                /* canal déjà fermé */
+            }
+        }
+    };
+}
