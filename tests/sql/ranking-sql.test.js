@@ -6,7 +6,7 @@
  *  - signal temps réel ; robustesse face aux données absurdes ; idempotence ; désinstallation.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { createDatabase, asRole, createUser, addGrade, join, snapshot, pulseVersion, RANKING_SQL, RANKING_SQL_V1_0_1, RANKING_SQL_V1_1_0, UNINSTALL_SQL } from "./pglite-env.js";
+import { createDatabase, asRole, createUser, addGrade, join, snapshot, pulseVersion, RANKING_SQL, RANKING_SQL_V1_0_1, RANKING_SQL_V1_1_0, RANKING_SQL_V1_2_0, UNINSTALL_SQL } from "./pglite-env.js";
 import { calculateAllAverages, sortGradesForCalculation } from "../reference/grades-calc.js";
 import { ALL_SUBJECTS } from "../../js/program.js";
 import { curriculumSql } from "../../scripts/curriculum-sql.mjs";
@@ -486,6 +486,39 @@ describe("mise à jour depuis la v1.1.0", () => {
             { display_name: "Hors liste", class_name: null, td_group: null, origin: null, track: "dacs", first_name: "Bea", show_grades: false }
         ]);
         expect((await snapshot(old, a)).map((r) => [r.display_name, r.general_average]).sort()).toEqual([["Dans la liste", 13], ["Hors liste", 9]]);
+        await old.close();
+    });
+});
+
+describe("mise à jour depuis la v1.2.0 (version en production)", () => {
+    it("profils, moyennes et rangs du S1 inchangés ; le site v1.2 continue de fonctionner", async () => {
+        const old = await createDatabase({ ranking: false });
+        await old.exec(RANKING_SQL_V1_2_0);
+        const users = [];
+        for (let i = 0; i < 6; i++) {
+            const u = await createUser(old, `v12-${i}@example.com`);
+            users.push(u);
+            await join(old, u, `V12 ${i}`);
+            await asRole(old, u, (tx) => tx.query("update public.ranking_profiles set class_name = 'S7', td_group = 'TD2', show_grades = $2 where user_id = $1", [u, i % 2 === 0]));
+            for (let k = 0; k < 4; k++) await addGrade(old, u, { name: `N${k}`, subjectCode: ["R1.01", "SAE 1.02", "R1.06", "R1.11"][k], score: 7 + i + k * 1.37, max: 20, coeff: 1 + (k % 2), createdAt: k });
+        }
+        const pick = (rows) =>
+            rows
+                .map((r) => ({ key: r.student_key, name: r.display_name, me: r.is_me, s: r.subject_averages, u: r.ue_averages, g: r.general_average, c: r.class_name, td: r.td_group, sg: r.shares_grades }))
+                .sort((a, b) => (a.key < b.key ? -1 : 1));
+        const before = pick(await snapshot(old, users[0]));
+        const profiles = (await old.query("select * from public.ranking_profiles order by user_id")).rows;
+        await old.exec(RANKING_SQL);
+        await old.exec(RANKING_SQL);
+        const after = await snapshot(old, users[0]);
+        expect(pick(after)).toEqual(before);
+        expect((await old.query("select * from public.ranking_profiles order by user_id")).rows).toEqual(profiles);
+        for (const r of after) expect(r.semesters["1"].general).toBe(r.general_average);
+        // Détail des notes et suppression de compte toujours disponibles
+        const key = after.find((r) => r.is_me).student_key;
+        expect((await asRole(old, users[0], (tx) => tx.query("select * from public.ranking_student_grades($1)", [key]))).rows).toHaveLength(4);
+        await asRole(old, users[5], (tx) => tx.query("select public.ranking_delete_account()"));
+        expect(await snapshot(old, users[0])).toHaveLength(5);
         await old.close();
     });
 });
