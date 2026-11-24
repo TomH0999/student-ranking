@@ -1,9 +1,12 @@
-# Classement BUT1 Informatique
+# Classement BUT Informatique
 
-Classement **en temps réel** des étudiants du BUT1 Informatique (IUT de Montpellier-Sète), à partir
-des notes saisies dans le [gestionnaire de scolarité](https://github.com/TomH0999/gestionnaire_de_notes).
+Classement **en temps réel** des étudiants du BUT Informatique (IUT de Montpellier-Sète), du
+semestre 1 au semestre 6, à partir des notes saisies dans le
+[gestionnaire de scolarité](https://github.com/TomH0999/gestionnaire_de_notes).
 
-- un classement par **matière** (12 ressources + 6 SAÉ), par **UE** (6) et sur la **moyenne générale** ;
+- pour **chaque semestre** (S1 à S6) : un classement par **matière**, par **UE** et sur la
+  **moyenne générale** ; à partir du S4, selon le parcours choisi dans le gestionnaire ;
+- sur **tous les semestres** : classement sur la **moyenne globale** et par **compétence** ;
 - les moyennes sont recalculées avec **exactement** les formules et coefficients de l'application ;
 - chaque classement recense tous les inscrits qui ont la moyenne concernée, et se met à jour tout
   seul dès qu'une note change ;
@@ -83,7 +86,8 @@ Pour l'installer comme une application : *Partager → Sur l'écran d'accueil* (
 
 | Élément | Rôle |
 |---|---|
-| **Générale / UE / Matières** | Choix du classement ; pour les UE et les matières, une pastille par code (en pointillés : personne n'a encore cette moyenne) |
+| **Tous / S1 … S6** | Tous les semestres (moyenne globale, compétences) ou un semestre précis. Un semestre grisé n'a encore aucune moyenne |
+| **Générale / UE / Matières** | Choix du classement dans le semestre ; pour les UE et les matières, une pastille par code (en pointillés : personne n'a encore cette moyenne). Dans « Tous » : **Globale / Compétences** |
 | **Ma place** | Votre rang sur le nombre de classés, votre moyenne, la moyenne des classés, l'écart avec le premier |
 | **Filtres** | Classe, groupe TD, provenance, parcours visé : le classement et les rangs sont recalculés dans la sélection. Un filtre n'apparaît que si quelqu'un a renseigné l'information |
 | **Liste** | Tous les inscrits ayant cette moyenne, du premier au dernier ; votre ligne est surlignée ; un liseré vert signale une moyenne qui vient de changer. Un clic sur une ligne ouvre la **fiche** de l'étudiant : profil affiché, moyennes et rangs, détail des notes s'il le partage |
@@ -95,6 +99,10 @@ Pour l'installer comme une application : *Partager → Sur l'écran d'accueil* (
 - vous n'apparaissez dans un classement que si vous avez **au moins une note** dans la matière (ou
   dans une matière de l'UE) ;
 - deux moyennes identiques à l'affichage (2 décimales) sont **ex æquo** : rangs 1, 2, 2, 4 ;
+- **moyenne globale** = moyenne simple des moyennes de semestre calculées ; **compétence** =
+  moyenne simple des UE de cette compétence (UE 1.1, 2.1, 3.1… pour la compétence 1) ;
+- à partir du **S4**, vos moyennes ne sont calculées qu'une fois votre **parcours** (RACDV, DACS,
+  IAMSI) choisi dans le gestionnaire ; votre parcours n'est jamais montré aux autres ;
 - rien ne se saisit ici : pour changer une moyenne, modifiez vos notes dans le gestionnaire.
 
 ### Mon profil
@@ -174,7 +182,8 @@ npm install
 | Commande | Rôle |
 |---|---|
 | `npm run serve` | Sert le site sur <http://127.0.0.1:4174/student-ranking/> |
-| `npm test` | Logique du classement + SQL sur un vrai Postgres (PGlite), dont la parité au bit près avec le calcul de l'application |
+| `npm test` | Logique du classement + SQL sur un vrai Postgres (PGlite), dont la parité au bit près avec le calcul de l'application, semestre par semestre |
+| `node scripts/curriculum-sql.mjs --write` | Régénère le programme (coefficients S1 à S6) dans `supabase/ranking.sql` à partir de `js/curriculum-data.js` |
 | `npm run test:e2e` | Tests navigateur (Chromium bureau et mobile) avec un faux Supabase |
 
 ```
@@ -184,5 +193,6 @@ supabase/                           ranking.sql (installation), uninstall.sql
 tests/reference/                    copies de référence du calcul et du schéma de l'application
 ```
 
-Si les coefficients ou le programme changent dans l'application, reportez-les dans `js/program.js`
-et dans `supabase/ranking.sql` (un test vérifie qu'ils concordent).
+Si les coefficients changent dans l'application : recopier `js/core/curriculum-data.js` du
+gestionnaire dans `js/` et `tests/reference/`, puis `node scripts/curriculum-sql.mjs --write` et
+réexécuter `supabase/ranking.sql` dans Supabase (un test vérifie que le SQL est à jour).

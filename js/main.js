@@ -9,7 +9,7 @@ import { RANKING_VERSION } from "./version.js";
 import { createApi } from "./api.js";
 import { h, replace } from "./dom.js";
 import {
-    KINDS, GENERAL, CATEGORIES, ORIGINS, TRACKS, CLASSES, TD_GROUPS, FILTERS, buildBackup, backupFileName, categoryById, categoriesOfKind, normalizeSnapshot,
+    GLOBAL, VIEWS, kindsForView, categoriesOfView, semestersWithData, viewLabel, parcoursLabel, ORIGINS, TRACKS, CLASSES, TD_GROUPS, FILTERS, buildBackup, backupFileName, categoryById, categoriesOfKind, normalizeSnapshot,
     buildLeaderboard, mySummary, filterOptions, sanitizeFilters, applyFilters, profileTags, originLabel, trackLabel,
     groupGrades, formatAverage, formatNumber, ordinal, validateDisplayName, validateProfile
 } from "./ranking.js";
@@ -33,7 +33,7 @@ function loadCategory() {
     try {
         return categoryById(localStorage.getItem(CATEGORY_KEY));
     } catch {
-        return GENERAL;
+        return GLOBAL;
     }
 }
 
@@ -244,11 +244,55 @@ function setFilter(id, value) {
     renderBoard();
 }
 
-function kindTabs() {
+/** À partir du S4, sans parcours choisi dans le gestionnaire, ses moyennes ne sont pas calculées. */
+function parcoursHint() {
+    const view = state.category.view;
+    if (view === "all" || view < 4) return null;
+    const me = state.students.find((s) => s.isMe);
+    if (me && me.parcours) return h("p", { class: "hint parcours" }, `Votre parcours : ${parcoursLabel(me.parcours)}.`);
+    return h(
+        "p",
+        { class: "banner" },
+        "À partir du semestre 4, vos moyennes dépendent de votre parcours : choisissez-le dans le gestionnaire de scolarité (sélecteur de semestre) pour apparaître dans ce classement. ",
+        appLink("Ouvrir l'application")
+    );
+}
+
+/** Vue : tous les semestres, ou un semestre (S1 à S6). */
+function viewBar() {
+    const view = state.category.view;
+    const withData = new Set(semestersWithData(state.students));
     return h(
         "div",
-        { class: "tabs", role: "group", "aria-label": "Type de moyenne" },
-        KINDS.map((kind) =>
+        { class: "views", role: "group", "aria-label": "Semestre" },
+        VIEWS.map((v) =>
+            h(
+                "button",
+                {
+                    type: "button",
+                    class: `view${v !== "all" && !withData.has(v) ? " empty" : ""}`,
+                    dataset: { fid: `view:${v}` },
+                    "aria-pressed": String(view === v),
+                    title: v === "all" ? "Tous les semestres : moyenne globale et compétences" : `Semestre ${v}${withData.has(v) ? "" : " (aucune moyenne pour l'instant)"}`,
+                    onclick: () => {
+                        if (view === v) return;
+                        // même type de classement dans la nouvelle vue quand il existe
+                        const sameKind = categoriesOfView(v).find((c) => c.kind === state.category.kind);
+                        selectCategory(sameKind && sameKind.kind !== "general" ? sameKind : categoriesOfView(v)[0]);
+                    }
+                },
+                viewLabel(v)
+            )
+        )
+    );
+}
+
+function kindTabs() {
+    const kinds = kindsForView(state.category.view);
+    return h(
+        "div",
+        { class: `tabs${kinds.length === 2 ? " two" : ""}`, role: "group", "aria-label": "Type de moyenne" },
+        kinds.map((kind) =>
             h(
                 "button",
                 {
@@ -257,7 +301,7 @@ function kindTabs() {
                     dataset: { fid: `kind:${kind.id}` },
                     "aria-pressed": String(state.category.kind === kind.id),
                     onclick: () => {
-                        if (state.category.kind !== kind.id) selectCategory(categoriesOfKind(kind.id)[0]);
+                        if (state.category.kind !== kind.id) selectCategory(categoriesOfKind(kind.id, state.category.view)[0]);
                     }
                 },
                 kind.label
@@ -270,8 +314,8 @@ function categoryChips(students) {
     if (state.category.kind === "general") return null;
     return h(
         "div",
-        { class: "chips", role: "group", "aria-label": state.category.kind === "ue" ? "Unité d'enseignement" : "Matière" },
-        categoriesOfKind(state.category.kind).map((category) => {
+        { class: "chips", role: "group", "aria-label": state.category.view === "all" ? "Compétence" : state.category.kind === "ue" ? "Unité d'enseignement" : "Matière" },
+        categoriesOfKind(state.category.kind, state.category.view).map((category) => {
             const count = buildLeaderboard(students, category).count;
             return h(
                 "button",
@@ -420,13 +464,13 @@ function boardList(board, filtered) {
 }
 
 function summarySection(students, filtered) {
-    const summary = mySummary(students);
+    const summary = mySummary(students, state.category.view);
     if (summary.length === 0) return null;
     const open = !document.getElementById("summary") || document.getElementById("summary").open;
     return h(
         "details",
         { class: "card fold", id: "summary", open },
-        h("summary", { dataset: { fid: "summary" } }, filtered ? "Mes classements (sélection affichée)" : "Mes classements"),
+        h("summary", { dataset: { fid: "summary" } }, `Mes classements — ${state.category.view === "all" ? "tous les semestres" : `semestre ${state.category.view}`}${filtered ? " (sélection affichée)" : ""}`),
         h(
             "ul",
             { class: "summary" },
@@ -488,7 +532,10 @@ async function loadSheetGrades() {
 
 function sheetAverages(student) {
     const rows = [];
-    for (const category of CATEGORIES) {
+    // Moyenne globale et moyenne de chaque semestre, puis le détail de la vue affichée
+    const list = [GLOBAL, ...VIEWS.filter((v) => v !== "all").map((v) => categoriesOfView(v)[0])];
+    for (const c of categoriesOfView(state.category.view)) if (!list.includes(c)) list.push(c);
+    for (const category of list) {
         const board = buildLeaderboard(state.students, category);
         const mine = board.rows.find((r) => r.student.key === student.key);
         if (mine) rows.push(h("li", null, h("span", { class: "summary-code" }, category.code), h("span", { class: "summary-name" }, category.name), h("span", { class: "summary-avg" }, formatAverage(mine.value)), h("span", { class: "summary-rank" }, ordinal(mine.rank), h("small", null, ` / ${board.count}`))));
@@ -831,8 +878,10 @@ function renderBoard() {
     const board = buildLeaderboard(students, state.category);
     const before = [
         state.loadError ? h("p", { class: "banner", role: "status" }, `Mise à jour impossible pour l'instant (${state.loadError}) — dernières données affichées.`) : null,
+        viewBar(),
         kindTabs(),
-        categoryChips(students)
+        categoryChips(students),
+        parcoursHint()
     ].filter(Boolean);
     const after = [
         h(
@@ -841,7 +890,7 @@ function renderBoard() {
             h(
                 "div",
                 { class: "board-head" },
-                h("div", null, h("h2", null, state.category.kind === "general" ? state.category.name : `${state.category.code} — ${state.category.name}`), h("p", { class: "hint", dataset: { testid: "count" } }, `${board.count} étudiant${board.count > 1 ? "s" : ""} classé${board.count > 1 ? "s" : ""}${filtered ? " dans la sélection" : ""} · mis à jour à ${state.lastUpdate.toLocaleTimeString("fr-FR")}`))
+                h("div", null, h("h2", null, state.category.kind === "general" ? state.category.name : state.category.view === "all" ? `${state.category.name} — tous les semestres` : `${state.category.code} — ${state.category.name}`), h("p", { class: "hint", dataset: { testid: "count" } }, `${board.count} étudiant${board.count > 1 ? "s" : ""} classé${board.count > 1 ? "s" : ""}${filtered ? " dans la sélection" : ""} · mis à jour à ${state.lastUpdate.toLocaleTimeString("fr-FR")}`))
             ),
             positionCard(board, filtered),
             boardList(board, filtered)

@@ -1,36 +1,86 @@
 /**
  * Logique pure du classement (aucun accès au DOM ni au réseau) : catégories,
  * tri, rangs avec ex æquo, récapitulatif personnel.
+ *
+ * Vues : « tous les semestres » (moyenne globale, compétences) ou un semestre S1 à S6
+ * (moyenne générale, UE, matières).
  */
-import { PROGRAM_S1, ALL_SUBJECTS, isSae } from "./program.js";
+import { SUBJECTS, UE_TABLES } from "./curriculum-data.js";
+import { COMPETENCES, PARCOURS, subjectInfo } from "./curriculum.js";
 
 /** Affichage d'une moyenne, identique à l'application (2 décimales, point). */
 export function formatAverage(value) {
     return value === null || value === undefined ? "--" : value.toFixed(2);
 }
 
-export const GENERAL = { id: "general", kind: "general", code: "Général", name: "Moyenne générale" };
+export const SEMESTERS = [1, 2, 3, 4, 5, 6];
+/** Vues du classement : "all" (tous les semestres) ou un numéro de semestre. */
+export const VIEWS = ["all", ...SEMESTERS];
+
+export const GLOBAL = { id: "global", view: "all", kind: "general", code: "Global", name: "Moyenne globale (tous les semestres)" };
+
+const competenceName = (id) => COMPETENCES.find((c) => c.id === id).name;
+
+function semesterCategories(sem) {
+    const general = { id: `general:${sem}`, view: sem, kind: "general", code: `S${sem}`, name: `Moyenne générale du semestre ${sem}` };
+    // UE : à partir du S4, réunion des UE de tous les parcours (même code = même compétence)
+    const t = UE_TABLES[sem];
+    const lists = t.common ? [t.common] : Object.values(t.parcours);
+    const ueCodes = [...new Set(lists.flatMap((l) => l.map((u) => u.code)))].sort();
+    const ues = ueCodes.map((code) => ({ id: `ue:${code}`, view: sem, kind: "ue", code, name: competenceName(Number(code.split(".")[1])) }));
+    const subjects = SUBJECTS.filter((x) => x.semester === sem)
+        .sort((a, b) => (a.code.startsWith("R") === b.code.startsWith("R") ? 0 : a.code.startsWith("R") ? -1 : 1))
+        .map((x) => ({ id: `subject:${x.code}`, view: sem, kind: "subject", code: x.code, name: x.name }));
+    return [general, ...ues, ...subjects];
+}
 
 export const CATEGORIES = [
-    GENERAL,
-    ...PROGRAM_S1.ues.map((u) => ({ id: `ue:${u.code}`, kind: "ue", code: u.code, name: u.name })),
-    ...ALL_SUBJECTS.map((s) => ({ id: `subject:${s.code}`, kind: "subject", code: s.code, name: s.name, sae: isSae(s.code) }))
+    GLOBAL,
+    ...COMPETENCES.map((c) => ({ id: `competence:${c.id}`, view: "all", kind: "ue", code: `C${c.id}`, name: c.name, competence: c.id })),
+    ...SEMESTERS.flatMap(semesterCategories)
 ];
 
-export const KINDS = [
-    { id: "general", label: "Générale" },
-    { id: "ue", label: "UE" },
-    { id: "subject", label: "Matières" }
-];
+/** Rétrocompatibilité : la moyenne générale du S1 s'appelait « general ». */
+export const GENERAL = CATEGORIES.find((c) => c.id === "general:1");
+
+export function kindsForView(view) {
+    return view === "all"
+        ? [
+              { id: "general", label: "Globale" },
+              { id: "ue", label: "Compétences" }
+          ]
+        : [
+              { id: "general", label: "Générale" },
+              { id: "ue", label: "UE" },
+              { id: "subject", label: "Matières" }
+          ];
+}
+
+/** Anciennes constantes (vue d'un semestre). */
+export const KINDS = kindsForView(1);
 
 const BY_ID = new Map(CATEGORIES.map((c) => [c.id, c]));
 
 export function categoryById(id) {
-    return BY_ID.get(id) || GENERAL;
+    if (id === "general") return GENERAL;
+    return BY_ID.get(id) || GLOBAL;
 }
 
-export function categoriesOfKind(kind) {
-    return CATEGORIES.filter((c) => c.kind === kind);
+export function categoriesOfKind(kind, view = 1) {
+    return CATEGORIES.filter((c) => c.kind === kind && c.view === view);
+}
+
+export function categoriesOfView(view) {
+    return CATEGORIES.filter((c) => c.view === view);
+}
+
+export function viewLabel(view) {
+    return view === "all" ? "Tous" : `S${view}`;
+}
+
+export function parcoursLabel(id) {
+    const p = PARCOURS.find((x) => x.id === id);
+    return p ? p.label : null;
 }
 
 /** Provenance (bac) et parcours visé en 2e année : identifiants stockés → libellés. */
@@ -120,21 +170,62 @@ function numberMap(obj) {
     return out;
 }
 
+function semesterMap(row) {
+    const out = {};
+    const src = row.semesters && typeof row.semesters === "object" && !Array.isArray(row.semesters) ? row.semesters : null;
+    if (src) {
+        for (const sem of SEMESTERS) {
+            const v = src[String(sem)];
+            if (!v || typeof v !== "object") continue;
+            const general = finite(v.general);
+            if (general === null) continue;
+            out[sem] = { general, ues: numberMap(v.ues), subjects: numberMap(v.subjects) };
+        }
+    } else {
+        // Base d'avant la v1.3 : seulement le S1, dans les colonnes historiques
+        const general = finite(row.general_average);
+        if (general !== null) out[1] = { general, ues: numberMap(row.ue_averages), subjects: numberMap(row.subject_averages) };
+    }
+    return out;
+}
+
+/** Moyenne simple, dans l'ordre donné (même calcul que le tableau de bord de l'application). */
+function mean(values) {
+    return values.length ? values.reduce((a, b) => a + b, 0) / values.length : null;
+}
+
 /** Assainit la réponse de ranking_snapshot() (jamais de confiance aveugle dans le réseau). */
 export function normalizeSnapshot(rows) {
     if (!Array.isArray(rows)) return [];
     const students = [];
     for (const row of rows) {
         if (!row || typeof row !== "object") continue;
-        const general = finite(row.general_average);
-        if (general === null) continue;
+        const semesters = semesterMap(row);
+        const generals = SEMESTERS.filter((s) => semesters[s]).map((s) => semesters[s].general);
+        if (generals.length === 0) continue;
+        const competences = {};
+        for (const c of COMPETENCES) {
+            const values = [];
+            for (const sem of SEMESTERS) {
+                if (!semesters[sem]) continue;
+                for (const [code, v] of Object.entries(semesters[sem].ues)) if (Number(code.split(".")[1]) === c.id) values.push(v);
+            }
+            const m = mean(values);
+            if (m !== null) competences[c.id] = m;
+        }
+        const s1 = semesters[1] || { general: null, ues: {}, subjects: {} };
         students.push({
             key: String(row.student_key ?? students.length),
             name: typeof row.display_name === "string" && row.display_name.trim() ? row.display_name.trim() : "Étudiant",
             isMe: row.is_me === true,
-            general,
-            ues: numberMap(row.ue_averages),
-            subjects: numberMap(row.subject_averages),
+            semesters,
+            global: mean(generals),
+            competences,
+            parcours: row.is_me === true && PARCOURS.some((p) => p.id === row.parcours) ? row.parcours : null,
+            // Raccourcis du S1 (anciennes versions)
+            general: s1.general,
+            ues: s1.ues,
+            subjects: s1.subjects,
             // Profil : uniquement ce que l'étudiant a choisi d'afficher (le reste arrive à null)
             origin: knownOrNull(row.origin, ORIGINS),
             track: knownOrNull(row.track, TRACKS),
@@ -149,9 +240,26 @@ export function normalizeSnapshot(rows) {
 
 /** Moyenne d'un étudiant dans une catégorie, ou null s'il n'en a pas. */
 export function valueFor(student, category) {
-    if (category.kind === "general") return student.general;
-    const v = (category.kind === "ue" ? student.ues : student.subjects)[category.code];
-    return v === undefined ? null : v;
+    let v;
+    if (category.id === "global") v = student.global;
+    else if (category.competence) v = student.competences[category.competence];
+    else {
+        const sem = student.semesters[category.view];
+        if (!sem) return null;
+        v = category.kind === "general" ? sem.general : (category.kind === "ue" ? sem.ues : sem.subjects)[category.code];
+    }
+    return v === undefined || v === null ? null : v;
+}
+
+/** Semestres (1 à 6) où au moins un étudiant a une moyenne. */
+export function semestersWithData(students) {
+    return SEMESTERS.filter((s) => students.some((st) => st.semesters[s]));
+}
+
+/** Nom complet d'une matière, quel que soit son semestre. */
+export function subjectLabel(code) {
+    const info = subjectInfo(code);
+    return info ? info.name : code;
 }
 
 /**
@@ -193,10 +301,10 @@ export function buildLeaderboard(students, category) {
     };
 }
 
-/** Mes rangs dans toutes les catégories où j'ai une moyenne. */
-export function mySummary(students) {
+/** Mes rangs dans les catégories d'une vue (par défaut : toutes) où j'ai une moyenne. */
+export function mySummary(students, view = null) {
     const out = [];
-    for (const category of CATEGORIES) {
+    for (const category of view === null ? CATEGORIES : categoriesOfView(view)) {
         const board = buildLeaderboard(students, category);
         if (board.mine) out.push({ category, value: board.mine.value, rank: board.mine.rank, tied: board.mine.tied, count: board.count });
     }
@@ -275,7 +383,7 @@ export function groupGrades(rows) {
             bySubject.get(code).push({ name: textOrNull(row.name) || "Évaluation", score, max, coeff });
         }
     }
-    return ALL_SUBJECTS.filter((s) => bySubject.has(s.code)).map((s) => ({ code: s.code, name: s.name, grades: bySubject.get(s.code) }));
+    return SUBJECTS.filter((s) => bySubject.has(s.code)).map((s) => ({ code: s.code, name: s.name, semester: s.semester, grades: bySubject.get(s.code) }));
 }
 
 /** Même format que l'export du gestionnaire de scolarité : le fichier peut y être réimporté. */

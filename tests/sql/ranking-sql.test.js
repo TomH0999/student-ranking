@@ -8,7 +8,11 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { createDatabase, asRole, createUser, addGrade, join, snapshot, pulseVersion, RANKING_SQL, RANKING_SQL_V1_0_1, RANKING_SQL_V1_1_0, UNINSTALL_SQL } from "./pglite-env.js";
 import { calculateAllAverages, sortGradesForCalculation } from "../reference/grades-calc.js";
-import { ALL_SUBJECTS, PROGRAM_S1, COEFFICIENTS_UE } from "../../js/program.js";
+import { ALL_SUBJECTS } from "../../js/program.js";
+import { curriculumSql } from "../../scripts/curriculum-sql.mjs";
+import { computeSemester } from "../reference/semester-calc.js";
+import { PARCOURS } from "../reference/curriculum.js";
+import { SUBJECTS } from "../reference/curriculum-data.js";
 
 /** Générateur pseudo-aléatoire déterministe (mulberry32). */
 function rng(seed) {
@@ -57,13 +61,8 @@ afterAll(async () => {
 });
 
 describe("parité avec le calcul de l'application", () => {
-    it("les coefficients du SQL sont ceux du programme", () => {
-        for (const [i, s] of ALL_SUBJECTS.entries()) expect(RANKING_SQL).toContain(`('${s.code}', ${i + 1})`);
-        for (const [u, ue] of PROGRAM_S1.ues.entries()) {
-            for (const [i, [sub, coeff]] of Object.entries(COEFFICIENTS_UE[ue.code]).entries()) {
-                expect(RANKING_SQL).toContain(`('${ue.code}', ${u + 1}, '${sub}', ${i + 1}, ${coeff})`);
-            }
-        }
+    it("le programme du SQL est celui de l'application (généré, à jour)", () => {
+        expect(RANKING_SQL).toContain(curriculumSql());
     });
 
     it("moyennes identiques au bit près sur 40 étudiants aléatoires", async () => {
@@ -119,6 +118,111 @@ describe("parité avec le calcul de l'application", () => {
     });
 });
 
+describe("semestres 2 à 6 et parcours", () => {
+    const setParcours = (user, value) =>
+        asRole(db, user, (tx) =>
+            tx.query(
+                `insert into public.items (user_id, id, collection, data) values ($1, $2, 'settings', jsonb_build_object('key', 'parcours', 'value', $3::text))
+                 on conflict (user_id, id) do update set data = excluded.data`,
+                [user, "00000000-0000-4000-8000-00000000beef", value]
+            )
+        );
+
+    it("moyennes de chaque semestre identiques au bit près à l'application, avec ou sans parcours", async () => {
+        const rand = rng(424242);
+        const pick = (list) => list[Math.floor(rand() * list.length)];
+        const parcoursChoices = [null, ...PARCOURS.map((p) => p.id)];
+        const expected = new Map();
+        for (let n = 0; n < 30; n++) {
+            const user = await createUser(db, `semestres${n}@example.com`);
+            await join(db, user, `Semestres ${n}`);
+            const parcours = parcoursChoices[n % parcoursChoices.length];
+            if (parcours) await setParcours(user, parcours);
+            const grades = [];
+            const count = 5 + Math.floor(rand() * 60);
+            for (let i = 0; i < count; i++) {
+                const max = pick([20, 20, 10, 40, 100, 12.5]);
+                grades.push({
+                    id: crypto.randomUUID(),
+                    name: `Éval ${i}`,
+                    subjectCode: pick(SUBJECTS).code,
+                    score: Math.round(rand() * max * 100) / 100,
+                    max,
+                    coeff: pick([1, 1, 2, 0.5, 3, 0.25]),
+                    createdAt: 1700000000000 + Math.floor(rand() * 5) * 1000
+                });
+            }
+            for (const g of grades) {
+                const { id, ...data } = g;
+                await addGrade(db, user, data, { id });
+            }
+            const sems = {};
+            for (const sem of [1, 2, 3, 4, 5, 6]) {
+                const r = computeSemester(grades, sem, parcours);
+                if (r.globalAverage === null) continue;
+                const clean = (o) => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== null && v !== undefined));
+                sems[sem] = { general: r.globalAverage, ues: clean(r.ueAverages), subjects: clean(r.subjectAverages) };
+            }
+            expected.set(`Semestres ${n}`, { parcours, sems });
+        }
+        const viewer = await createUser(db, "lecteur-semestres@example.com");
+        await join(db, viewer);
+        const rows = (await snapshot(db, viewer)).filter((r) => r.display_name.startsWith("Semestres "));
+        const withData = [...expected.values()].filter((e) => Object.keys(e.sems).length).length;
+        expect(rows).toHaveLength(withData);
+        let checked = 0;
+        for (const row of rows) {
+            const exp = expected.get(row.display_name);
+            expect(row.parcours ?? null).toBeNull(); // le parcours des autres n'est pas transmis
+            expect(Object.keys(row.semesters).sort(), row.display_name).toEqual(Object.keys(exp.sems).sort());
+            for (const [sem, e] of Object.entries(exp.sems)) {
+                const got = row.semesters[sem];
+                expect(Object.is(got.general, e.general), `${row.display_name} S${sem} : ${got.general} ≠ ${e.general}`).toBe(true);
+                expect(got.ues, `${row.display_name} S${sem}`).toEqual(e.ues);
+                expect(got.subjects, `${row.display_name} S${sem}`).toEqual(e.subjects);
+                checked++;
+            }
+            // Colonnes historiques = S1
+            expect(row.general_average ?? null).toBe(exp.sems[1] ? exp.sems[1].general : null);
+        }
+        expect(checked).toBeGreaterThan(60);
+    });
+
+    it("sans parcours, S4 à S6 ne sont pas calculés ; le choix du parcours les fait apparaître et prévient en direct", async () => {
+        const user = await createUser(db, "parcours@example.com");
+        await join(db, user, "Parcours");
+        await addGrade(db, user, { subjectCode: "Stage S4", score: 16, max: 20, coeff: 1, createdAt: 1 });
+        await addGrade(db, user, { subjectCode: "R4.01", score: 8, max: 20, coeff: 1, createdAt: 2 });
+        expect((await snapshot(db, user)).find((r) => r.is_me)).toBeUndefined();
+        const before = await pulseVersion(db);
+        await setParcours(user, "RACDV");
+        expect(await pulseVersion(db)).toBeGreaterThan(before);
+        const row = (await snapshot(db, user)).find((r) => r.is_me);
+        expect(row.parcours).toBe("RACDV");
+        expect(Object.keys(row.semesters)).toEqual(["4"]);
+        expect(row.semesters["4"].ues["UE 4.1"]).toBeCloseTo((16 * 60 + 8 * 40) / 100, 12);
+        expect(row.general_average).toBeNull();
+        await setParcours(user, "pas-un-parcours");
+        expect((await snapshot(db, user)).find((r) => r.is_me)).toBeUndefined();
+    });
+
+    it("le détail des notes partagées couvre tous les semestres", async () => {
+        const user = await createUser(db, "detail-s4@example.com");
+        await join(db, user, "Détail S4");
+        await addGrade(db, user, { name: "Stage", subjectCode: "Stage S6", score: 15, max: 20, coeff: 1, createdAt: 1 });
+        await addGrade(db, user, { name: "Inconnue", subjectCode: "R9.99", score: 15, max: 20, coeff: 1, createdAt: 2 });
+        const key = (await asRole(db, user, (tx) => tx.query("select substr(md5($1::text), 1, 12) as k", [user]))).rows[0].k;
+        const rows = (await asRole(db, user, (tx) => tx.query("select * from public.ranking_student_grades($1)", [key]))).rows;
+        expect(rows.map((r) => r.subject_code)).toEqual(["Stage S6"]);
+    });
+
+    it("le programme n'est pas lisible directement", async () => {
+        const u = await createUser(db, "curieux@example.com");
+        await expect(asRole(db, u, (tx) => tx.query("select * from public.ranking_curriculum"))).rejects.toThrow(/permission denied/);
+        await expect(asRole(db, null, (tx) => tx.query("select * from public.ranking_curriculum"))).rejects.toThrow(/permission denied/);
+    });
+});
+
 describe("participants et confidentialité", () => {
     let alice, bob, carol, dave;
     beforeAll(async () => {
@@ -153,7 +257,7 @@ describe("participants et confidentialité", () => {
         const dump = JSON.stringify(rows);
         for (const secret of [alice, bob, "alice@example.com", "bob@example.com"]) expect(dump).not.toContain(secret);
         expect(Object.keys(rows[0]).sort()).toEqual([
-            "class_name", "display_name", "general_average", "is_me", "origin", "shares_grades",
+            "class_name", "display_name", "general_average", "is_me", "origin", "parcours", "semesters", "shares_grades",
             "student_key", "student_number", "subject_averages", "td_group", "track", "ue_averages"
         ]);
         // Profil non renseigné : rien de plus qu'en v1.0
@@ -342,7 +446,10 @@ describe("mise à jour depuis la v1.0.1", () => {
         const after = await snapshot(old, a);
         expect(after).toHaveLength(2);
         // Toutes les colonnes lues par le site v1.0.1 sont identiques
-        const v1 = (rows) => rows.map(({ student_key, display_name, is_me, subject_averages, ue_averages, general_average }) => ({ student_key, display_name, is_me, subject_averages, ue_averages, general_average }));
+        const v1 = (rows) =>
+            rows
+                .map(({ student_key, display_name, is_me, subject_averages, ue_averages, general_average }) => ({ student_key, display_name, is_me, subject_averages, ue_averages, general_average }))
+                .sort((x, y) => (x.student_key < y.student_key ? -1 : 1));
         expect(v1(after)).toEqual(v1(before));
         for (const row of after) expect(row).toMatchObject({ origin: null, class_name: null, td_group: null, track: null, student_number: null, shares_grades: false });
 
@@ -378,7 +485,7 @@ describe("mise à jour depuis la v1.1.0", () => {
             { display_name: "Dans la liste", class_name: "S7", td_group: "TD2", origin: "sti2d", track: null, first_name: null, show_grades: true },
             { display_name: "Hors liste", class_name: null, td_group: null, origin: null, track: "dacs", first_name: "Bea", show_grades: false }
         ]);
-        expect((await snapshot(old, a)).map((r) => [r.display_name, r.general_average])).toEqual([["Dans la liste", 13], ["Hors liste", 9]]);
+        expect((await snapshot(old, a)).map((r) => [r.display_name, r.general_average]).sort()).toEqual([["Dans la liste", 13], ["Hors liste", 9]]);
         await old.close();
     });
 });
@@ -505,7 +612,7 @@ describe("robustesse", () => {
         const rows = await snapshot(db, honest);
         expect(rows.find((r) => r.is_me).general_average).toBe(15);
         expect(rows.map((r) => r.display_name)).not.toContain("Troll");
-        for (const r of rows) expect(Number.isFinite(r.general_average)).toBe(true);
+        for (const r of rows) for (const sem of Object.values(r.semesters)) expect(Number.isFinite(sem.general)).toBe(true);
     });
 
     it("ranking.sql est idempotent : rejoué sans erreur ni perte", async () => {
@@ -521,7 +628,7 @@ describe("robustesse", () => {
 
     it("RLS activée sur toutes les tables publiques ; fonctions à search_path figé", async () => {
         const t = await db.query("select relname, relrowsecurity from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'public' and c.relkind = 'r'");
-        expect(t.rows.map((x) => x.relname).sort()).toEqual(["items", "ranking_profiles", "ranking_pulse"]);
+        expect(t.rows.map((x) => x.relname).sort()).toEqual(["items", "ranking_curriculum", "ranking_profiles", "ranking_pulse"]);
         for (const row of t.rows) expect(row.relrowsecurity, row.relname).toBe(true);
         const f = await db.query("select proname, proconfig from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and proname like 'ranking_%'");
         expect(f.rows).toHaveLength(5);

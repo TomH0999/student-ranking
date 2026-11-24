@@ -156,7 +156,10 @@
                     is_me: s.owner === me,
                     subject_averages: s.subjects || {},
                     ue_averages: s.ues || {},
-                    general_average: s.general,
+                    general_average: s.general ?? null,
+                    // v1.3 : un objet par semestre ; par défaut, les moyennes du fixture sont celles du S1
+                    semesters: s.semesters || (s.general === undefined || s.general === null ? {} : { 1: { general: s.general, ues: s.ues || {}, subjects: s.subjects || {} } }),
+                    parcours: s.owner === me ? s.parcours || null : null,
                     origin: p.show_origin ? p.origin : null,
                     class_name: p.show_class ? p.class_name : null,
                     td_group: p.show_td_group ? p.td_group : null,

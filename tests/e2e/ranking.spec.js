@@ -40,6 +40,7 @@ async function open(page, { session = null, ...init } = {}) {
 
 const asTom = { access_token: "t", user: { id: "tom", email: "tom@example.com" } };
 const rows = (page) => page.locator(".board .row");
+const view = (page, label) => page.locator(".views").getByRole("button", { name: label, exact: true }).click();
 const rowTexts = async (page) => (await rows(page).allInnerTexts()).map((t) => t.replace(/\s+/g, " ").trim());
 
 test("connexion, puis classement général avec ma place", async ({ page }) => {
@@ -54,7 +55,8 @@ test("connexion, puis classement général avec ma place", async ({ page }) => {
     await page.getByLabel("Mot de passe").fill("secret-tom");
     await page.getByRole("button", { name: "Se connecter" }).click();
 
-    await expect(page.getByRole("heading", { name: "Moyenne générale" })).toBeVisible();
+    // Vue par défaut : tous les semestres (ici, seul le S1 est noté : moyenne globale = S1)
+    await expect(page.getByRole("heading", { name: "Moyenne globale (tous les semestres)" })).toBeVisible();
     await expect(rows(page)).toHaveCount(4);
     await expect.poll(() => rowTexts(page)).toEqual(["1 Zoé 18.20", "2 Léa 15.10", "3 Tom MOI 13.46", "4 Étudiant MAX 9.75"]);
     await expect(page.getByTestId("my-rank")).toHaveText("3e / 4");
@@ -70,6 +72,7 @@ test("la session du gestionnaire de scolarité est reprise sans se reconnecter",
 
 test("classement par UE et par matière : seuls ceux qui ont la moyenne, ex æquo", async ({ page }) => {
     await open(page, { session: asTom });
+    await view(page, "S1");
     await page.getByRole("button", { name: "UE", exact: true }).click();
     await expect(page.getByRole("heading", { name: /UE 1\.1 — Réaliser un développement/ })).toBeVisible();
     await expect.poll(() => rowTexts(page)).toEqual(["1 Tom MOI 14.20", "2 Léa 13.00", "3 Étudiant MAX 9.75"]);
@@ -199,8 +202,12 @@ test("quitter le classement, puis se déconnecter", async ({ page }) => {
 test("« Mes classements » récapitule mes rangs et sert de raccourci", async ({ page }) => {
     await open(page, { session: asTom });
     const summary = page.locator(".summary-row");
+    // Vue « Tous » : moyenne globale + compétences notées
+    await expect(summary).toHaveCount(3);
+    await expect(summary.nth(0)).toContainText("Global");
+    await view(page, "S1");
     await expect(summary).toHaveCount(5);
-    await expect(summary.nth(0)).toContainText("Général");
+    await expect(summary.nth(0)).toContainText("S1");
     await expect(summary.nth(0)).toContainText("3e / 4");
     await expect(summary.nth(2)).toContainText("UE 1.2");
     await expect(summary.nth(2)).toContainText("12.71");
@@ -224,6 +231,7 @@ test("un pseudo ne peut pas injecter de HTML ; aucune erreur ni violation CSP", 
     await expect(rows(page)).toHaveCount(4);
     await expect(rows(page).nth(1)).toContainText("<img src=x onerror=alert(1)>");
     await expect(page.locator(".board img")).toHaveCount(0);
+    await view(page, "S1");
     await page.getByRole("button", { name: "Matières" }).click();
     await page.getByText("Mon profil", { exact: true }).click();
     expect(problems).toEqual([]);
@@ -232,6 +240,7 @@ test("un pseudo ne peut pas injecter de HTML ; aucune erreur ni violation CSP", 
 test("pas de défilement horizontal de la page", async ({ page }) => {
     await open(page, { session: asTom, profiles: { ...PROFILES, zoe: "Un pseudo vraiment long !!" } });
     await expect(rows(page)).toHaveCount(4);
+    await view(page, "S1");
     await page.getByRole("button", { name: "Matières" }).click();
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     expect(overflow).toBeLessThanOrEqual(0);
@@ -592,4 +601,61 @@ test("après avoir choisi un filtre (liste encore sélectionnée), le classement
     await page.locator("#filter-className").blur();
     await expect(page.locator("#filter-className option")).toHaveText(["Toutes les classes", "S3 (2)", "S5 (1)", "S6 (1)"]);
     await expect(page.locator("#filter-className")).toHaveValue("S3");
+});
+
+
+// ---------------------------------------------------------------------------
+// v1.3 : semestres S1 à S6, moyenne globale, compétences
+// ---------------------------------------------------------------------------
+const MULTI = [
+    { owner: "tom", parcours: "RACDV", semesters: { 1: { general: 13, ues: { "UE 1.1": 12, "UE 1.2": 14 }, subjects: { "R1.01": 12 } }, 2: { general: 15, ues: { "UE 2.1": 15 }, subjects: { "R2.01": 15 } }, 4: { general: 11, ues: { "UE 4.1": 11 }, subjects: { "Stage S4": 11 } } } },
+    { owner: "lea", semesters: { 1: { general: 16, ues: { "UE 1.1": 16 }, subjects: { "R1.01": 16 } }, 2: { general: 10, ues: { "UE 2.1": 10 }, subjects: { "R2.01": 10 } } } },
+    { owner: "zoe", semesters: { 2: { general: 17, ues: { "UE 2.1": 17 }, subjects: { "R2.01": 17 } } } }
+];
+
+test("vue « Tous » : moyenne globale sur tous les semestres, puis compétences", async ({ page }) => {
+    await open(page, { session: asTom, students: MULTI });
+    await expect(page.locator(".views [aria-pressed=true]")).toHaveText("Tous");
+    // Tom (13+15+11)/3 = 13.00 ; Léa (16+10)/2 = 13.00 ; Zoé 17
+    await expect.poll(() => rowTexts(page)).toEqual(["1 Zoé 17.00", "2 Léa 13.00", "2 Tom MOI 13.00"]);
+    await page.getByRole("button", { name: "Compétences" }).click();
+    await expect(page.getByRole("heading", { name: /Réaliser un développement d'application — tous les semestres/ })).toBeVisible();
+    // C1 : Tom (12+15+11)/3 = 12.67, Léa (16+10)/2 = 13, Zoé 17
+    await expect.poll(() => rowTexts(page)).toEqual(["1 Zoé 17.00", "2 Léa 13.00", "3 Tom MOI 12.67"]);
+});
+
+test("changer de semestre : chaque vue ne classe que ceux qui ont la moyenne ; semestres vides grisés", async ({ page }) => {
+    await open(page, { session: asTom, students: MULTI });
+    await expect(page.locator(".views .view.empty")).toHaveText(["S3", "S5", "S6"]);
+    await view(page, "S2");
+    await expect(page.getByRole("heading", { name: "Moyenne générale du semestre 2" })).toBeVisible();
+    await expect.poll(() => rowTexts(page)).toEqual(["1 Zoé 17.00", "2 Tom MOI 15.00", "3 Léa 10.00"]);
+    await page.getByRole("button", { name: "Matières" }).click();
+    await expect(page.getByRole("heading", { name: /R2\.01 — Dev\. Objets/ })).toBeVisible();
+    // Le même type de classement est gardé en changeant de semestre
+    await view(page, "S1");
+    await expect(page.getByRole("heading", { name: /R1\.01 — Initiation au développement/ })).toBeVisible();
+    await expect.poll(() => rowTexts(page)).toEqual(["1 Léa 16.00", "2 Tom MOI 12.00"]);
+    await view(page, "S4");
+    await expect(page.getByText("Votre parcours : RACDV.")).toBeVisible();
+    await page.getByRole("button", { name: "Générale", exact: true }).click();
+    await expect(page.getByTestId("my-rank")).toHaveText("1er / 1");
+    // La vue choisie est mémorisée
+    await page.reload();
+    await expect(page.locator(".views [aria-pressed=true]")).toHaveText("S4");
+});
+
+test("S4 sans parcours choisi : invitation à le choisir dans le gestionnaire", async ({ page }) => {
+    await open(page, { session: asTom, students: MULTI.map((s) => (s.owner === "tom" ? { ...s, parcours: null } : s)) });
+    await view(page, "S5");
+    await expect(page.locator(".banner")).toContainText("choisissez-le dans le gestionnaire de scolarité");
+});
+
+test("fiche : moyenne globale et moyenne de chaque semestre noté", async ({ page }) => {
+    await open(page, { session: asTom, students: MULTI });
+    await page.locator(".row.me").click();
+    const sheet = page.locator("dialog[aria-labelledby=sheet-title]");
+    await expect(sheet.locator(".summary.static li").first()).toContainText("Global");
+    await expect(sheet.locator(".summary.static")).toContainText("S2");
+    await expect(sheet.locator(".summary.static")).toContainText("S4");
 });

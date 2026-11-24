@@ -13,5 +13,6 @@ drop function if exists public.ranking_student_grades(text);
 drop function if exists public.ranking_delete_account();
 drop table if exists public.ranking_profiles;
 drop table if exists public.ranking_pulse;
+drop table if exists public.ranking_curriculum;
 drop function if exists public.ranking_items_changed();
 drop function if exists public.ranking_touch();

@@ -1,25 +1,89 @@
 import { describe, it, expect } from "vitest";
 import {
-    CATEGORIES, GENERAL, categoryById, categoriesOfKind, normalizeSnapshot, buildLeaderboard, mySummary,
+    CATEGORIES, GENERAL, GLOBAL, categoryById, categoriesOfKind, categoriesOfView, kindsForView, semestersWithData, normalizeSnapshot, buildLeaderboard, mySummary,
     valueFor, rankKey, ordinal, formatAverage, validateDisplayName
 } from "../../js/ranking.js";
 
-const student = (name, general, { ues = {}, subjects = {}, isMe = false } = {}) => ({ key: name, name, isMe, general, ues, subjects });
+// Étudiant n'ayant que des moyennes de S1 (comme avant la v1.3)
+const student = (name, general, { ues = {}, subjects = {}, isMe = false } = {}) => ({
+    key: name,
+    name,
+    isMe,
+    general,
+    ues,
+    subjects,
+    semesters: { 1: { general, ues, subjects } },
+    global: general,
+    competences: {}
+});
 
 describe("catégories", () => {
-    it("1 générale, 6 UE, 18 matières (12 ressources + 6 SAÉ)", () => {
+    it("S1 : 1 générale, 6 UE, 18 matières (12 ressources + 6 SAÉ)", () => {
         expect(categoriesOfKind("general")).toHaveLength(1);
         expect(categoriesOfKind("ue")).toHaveLength(6);
         expect(categoriesOfKind("subject")).toHaveLength(18);
-        expect(CATEGORIES).toHaveLength(25);
-        expect(new Set(CATEGORIES.map((c) => c.id)).size).toBe(25);
+        expect(categoriesOfKind("subject").map((c) => c.code).slice(0, 2)).toEqual(["R1.01", "R1.02"]);
+        expect(new Set(CATEGORIES.map((c) => c.id)).size).toBe(CATEGORIES.length);
     });
 
-    it("categoryById retombe sur la moyenne générale", () => {
+    it("tous les semestres : moyenne globale et 6 compétences ; S5 : UE de tous les parcours", () => {
+        expect(categoriesOfView("all").map((c) => c.code)).toEqual(["Global", "C1", "C2", "C3", "C4", "C5", "C6"]);
+        expect(kindsForView("all").map((k) => k.label)).toEqual(["Globale", "Compétences"]);
+        expect(categoriesOfKind("ue", 5).map((c) => c.code)).toEqual(["UE 5.1", "UE 5.2", "UE 5.3", "UE 5.5", "UE 5.6"]);
+        expect(categoriesOfKind("subject", 2)).toHaveLength(20);
+        expect(categoriesOfKind("subject", 4).map((c) => c.code)).toContain("R4.B.10");
+    });
+
+    it("categoryById : anciens identifiants reconnus, inconnu → moyenne globale", () => {
         expect(categoryById("ue:UE 1.3").code).toBe("UE 1.3");
         expect(categoryById("subject:SAE 1.02").name).toBe("Comparaison d'approches algorithmiques");
-        expect(categoryById("n'existe pas")).toBe(GENERAL);
-        expect(categoryById(null)).toBe(GENERAL);
+        expect(categoryById("general")).toBe(GENERAL);
+        expect(GENERAL.id).toBe("general:1");
+        expect(categoryById("n'existe pas")).toBe(GLOBAL);
+        expect(categoryById(null)).toBe(GLOBAL);
+    });
+});
+
+describe("plusieurs semestres", () => {
+    const rows = [
+        {
+            student_key: "a", display_name: "Alice", is_me: true, parcours: "RACDV", general_average: 12,
+            semesters: { 1: { general: 12, ues: { "UE 1.1": 10, "UE 1.2": 14 }, subjects: { "R1.01": 11 } }, 4: { general: 15, ues: { "UE 4.1": 16 }, subjects: { "Stage S4": 16 } }, 9: { general: 1 } }
+        },
+        { student_key: "b", display_name: "Bob", parcours: "DACS", general_average: null, semesters: { 2: { general: 13, ues: { "UE 2.1": 13 }, subjects: {} }, 3: { general: "x" } } },
+        { student_key: "c", display_name: "Sans moyenne", semesters: {} }
+    ];
+
+    it("normalise les semestres, calcule la moyenne globale et les compétences", () => {
+        const [a, b] = normalizeSnapshot(rows);
+        expect(normalizeSnapshot(rows)).toHaveLength(2);
+        expect(Object.keys(a.semesters)).toEqual(["1", "4"]);
+        expect(a.global).toBe((12 + 15) / 2);
+        expect(a.competences).toEqual({ 1: (10 + 16) / 2, 2: 14 });
+        expect(a.parcours).toBe("RACDV");
+        expect(b.parcours).toBeNull(); // jamais le parcours des autres
+        expect(Object.keys(b.semesters)).toEqual(["2"]);
+        expect(b.general).toBeNull();
+        expect(semestersWithData([a, b])).toEqual([1, 2, 4]);
+    });
+
+    it("valueFor et classement par vue", () => {
+        const students = normalizeSnapshot(rows);
+        expect(valueFor(students[0], categoryById("general:4"))).toBe(15);
+        expect(valueFor(students[0], categoryById("ue:UE 4.1"))).toBe(16);
+        expect(valueFor(students[0], categoryById("subject:Stage S4"))).toBe(16);
+        expect(valueFor(students[1], categoryById("general:4"))).toBeNull();
+        expect(valueFor(students[0], categoryById("competence:1"))).toBe(13);
+        const board = buildLeaderboard(students, GLOBAL);
+        expect(board.rows.map((r) => [r.rank, r.student.name])).toEqual([[1, "Alice"], [2, "Bob"]]);
+        expect(mySummary(students, "all").map((x) => x.category.code)).toEqual(["Global", "C1", "C2"]);
+        expect(mySummary(students, 4).map((x) => x.category.code)).toEqual(["S4", "UE 4.1", "Stage S4"]);
+    });
+
+    it("ancienne base (avant la v1.3) : seulement le S1, depuis les colonnes historiques", () => {
+        const [x] = normalizeSnapshot([{ student_key: "z", display_name: "Z", general_average: 11, ue_averages: { "UE 1.1": 11 }, subject_averages: { "R1.01": 11 } }]);
+        expect(Object.keys(x.semesters)).toEqual(["1"]);
+        expect(x.global).toBe(11);
     });
 });
 
@@ -94,8 +158,8 @@ describe("mySummary", () => {
             student("Moi", 12, { isMe: true, ues: { "UE 1.2": 12, "UE 1.1": 8 }, subjects: { "SAE 1.01": 8, "R1.06": 12 } }),
             student("Autre", 14, { ues: { "UE 1.1": 14 }, subjects: { "SAE 1.01": 14 } })
         ];
-        expect(mySummary(students).map((s) => [s.category.code, s.rank, s.count])).toEqual([
-            ["Général", 2, 2],
+        expect(mySummary(students, 1).map((s) => [s.category.code, s.rank, s.count])).toEqual([
+            ["S1", 2, 2],
             ["UE 1.1", 2, 2],
             ["UE 1.2", 1, 1],
             ["R1.06", 1, 1],

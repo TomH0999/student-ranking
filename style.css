@@ -410,3 +410,22 @@ main {
 .backup.failed { border-color: rgba(251, 113, 133, 0.5); color: var(--bad); }
 .banner.ok { color: var(--ok); border-color: rgba(52, 211, 153, 0.35); background: rgba(52, 211, 153, 0.08); }
 .field input:disabled { opacity: 0.5; }
+
+/* Semestres (v1.3) */
+.views { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 4px; }
+.view {
+    font: inherit;
+    font-weight: 700;
+    font-size: 14px;
+    color: var(--muted);
+    background: transparent;
+    border: 0;
+    border-radius: 10px;
+    min-height: 44px;
+    cursor: pointer;
+}
+.view:hover { color: var(--text); }
+.view.empty { color: #475569; }
+.view[aria-pressed="true"] { background: var(--brand-strong); color: #fff; }
+.tabs.two { grid-template-columns: repeat(2, 1fr); }
+.hint.parcours { margin-top: -4px; }
