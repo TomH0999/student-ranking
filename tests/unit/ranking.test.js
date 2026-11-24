@@ -27,8 +27,10 @@ describe("catégories", () => {
     });
 
     it("tous les semestres : moyenne globale et 6 compétences ; S5 : UE de tous les parcours", () => {
-        expect(categoriesOfView("all").map((c) => c.code)).toEqual(["Global", "C1", "C2", "C3", "C4", "C5", "C6"]);
-        expect(kindsForView("all").map((k) => k.label)).toEqual(["Globale", "Compétences"]);
+        expect(categoriesOfKind("ue", "all").map((c) => c.code)).toEqual(["UE 1", "UE 2", "UE 3", "UE 4", "UE 5", "UE 6"]);
+        expect(categoriesOfKind("subject", "all")).toHaveLength(128);
+        expect(categoriesOfView("all")[0].code).toBe("Global");
+        expect(kindsForView("all").map((k) => k.label)).toEqual(["Générale", "UE", "Matières et SAÉ"]);
         expect(categoriesOfKind("ue", 5).map((c) => c.code)).toEqual(["UE 5.1", "UE 5.2", "UE 5.3", "UE 5.5", "UE 5.6"]);
         expect(categoriesOfKind("subject", 2)).toHaveLength(20);
         expect(categoriesOfKind("subject", 4).map((c) => c.code)).toContain("R4.B.10");
@@ -76,7 +78,9 @@ describe("plusieurs semestres", () => {
         expect(valueFor(students[0], categoryById("competence:1"))).toBe(13);
         const board = buildLeaderboard(students, GLOBAL);
         expect(board.rows.map((r) => [r.rank, r.student.name])).toEqual([[1, "Alice"], [2, "Bob"]]);
-        expect(mySummary(students, "all").map((x) => x.category.code)).toEqual(["Global", "C1", "C2"]);
+        expect(mySummary(students, "all").map((x) => x.category.code)).toEqual(["Global", "UE 1", "UE 2", "R1.01", "Stage S4"]);
+        expect(valueFor(students[0], categoryById("all-subject:Stage S4"))).toBe(16);
+        expect(valueFor(students[1], categoryById("all-subject:R1.01"))).toBeNull();
         expect(mySummary(students, 4).map((x) => x.category.code)).toEqual(["S4", "UE 4.1", "Stage S4"]);
     });
 

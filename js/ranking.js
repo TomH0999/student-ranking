@@ -36,7 +36,10 @@ function semesterCategories(sem) {
 
 export const CATEGORIES = [
     GLOBAL,
-    ...COMPETENCES.map((c) => ({ id: `competence:${c.id}`, view: "all", kind: "ue", code: `C${c.id}`, name: c.name, competence: c.id })),
+    // Vue « Tous » : UE de même numéro sur tous les semestres (UE 1 = UE 1.1, 2.1, 3.1…)
+    ...COMPETENCES.map((c) => ({ id: `competence:${c.id}`, view: "all", kind: "ue", code: `UE ${c.id}`, name: c.name, competence: c.id })),
+    // Vue « Tous » : chaque matière et SAÉ, quel que soit son semestre
+    ...SUBJECTS.map((x) => ({ id: `all-subject:${x.code}`, view: "all", kind: "subject", code: x.code, name: x.name, subjectSemester: x.semester })),
     ...SEMESTERS.flatMap(semesterCategories)
 ];
 
@@ -46,13 +49,14 @@ export const GENERAL = CATEGORIES.find((c) => c.id === "general:1");
 export function kindsForView(view) {
     return view === "all"
         ? [
-              { id: "general", label: "Globale" },
-              { id: "ue", label: "Compétences" }
+              { id: "general", label: "Générale" },
+              { id: "ue", label: "UE" },
+              { id: "subject", label: "Matières et SAÉ" }
           ]
         : [
               { id: "general", label: "Générale" },
               { id: "ue", label: "UE" },
-              { id: "subject", label: "Matières" }
+              { id: "subject", label: "Matières et SAÉ" }
           ];
 }
 
@@ -243,7 +247,10 @@ export function valueFor(student, category) {
     let v;
     if (category.id === "global") v = student.global;
     else if (category.competence) v = student.competences[category.competence];
-    else {
+    else if (category.subjectSemester) {
+        const sem = student.semesters[category.subjectSemester];
+        v = sem ? sem.subjects[category.code] : null;
+    } else {
         const sem = student.semesters[category.view];
         if (!sem) return null;
         v = category.kind === "general" ? sem.general : (category.kind === "ue" ? sem.ues : sem.subjects)[category.code];

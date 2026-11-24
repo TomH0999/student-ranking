@@ -202,8 +202,8 @@ test("quitter le classement, puis se déconnecter", async ({ page }) => {
 test("« Mes classements » récapitule mes rangs et sert de raccourci", async ({ page }) => {
     await open(page, { session: asTom });
     const summary = page.locator(".summary-row");
-    // Vue « Tous » : moyenne globale + compétences notées
-    await expect(summary).toHaveCount(3);
+    // Vue « Tous » : moyenne globale, UE et matières notées
+    await expect(summary).toHaveCount(5);
     await expect(summary.nth(0)).toContainText("Global");
     await view(page, "S1");
     await expect(summary).toHaveCount(5);
@@ -394,7 +394,8 @@ test("fiche d'un étudiant : profil affiché, moyennes et rangs, détail des not
     await expect(sheet.getByRole("heading", { name: "Léa" })).toBeVisible();
     await expect(sheet.locator(".facts")).toContainText("ClasseS3");
     await expect(sheet.locator(".facts")).toContainText("N° étudiant22104567");
-    await expect(sheet.locator(".summary.static li")).toHaveCount(3);
+    // Globale, S1, UE 1 et sa matière notée (R1.01)
+    await expect(sheet.locator(".summary.static li")).toHaveCount(4);
     await expect(sheet.locator(".summary.static li").first()).toContainText("2e / 4");
     await expect(sheet.locator(".grades li")).toHaveText(["Partielcoeff. 215,5 / 20", "TP notécoeff. 17,75 / 10"]);
 
@@ -613,15 +614,22 @@ const MULTI = [
     { owner: "zoe", semesters: { 2: { general: 17, ues: { "UE 2.1": 17 }, subjects: { "R2.01": 17 } } } }
 ];
 
-test("vue « Tous » : moyenne globale sur tous les semestres, puis compétences", async ({ page }) => {
+test("vue « Tous » : moyenne globale sur tous les semestres, puis UE et matières", async ({ page }) => {
     await open(page, { session: asTom, students: MULTI });
     await expect(page.locator(".views [aria-pressed=true]")).toHaveText("Tous");
     // Tom (13+15+11)/3 = 13.00 ; Léa (16+10)/2 = 13.00 ; Zoé 17
     await expect.poll(() => rowTexts(page)).toEqual(["1 Zoé 17.00", "2 Léa 13.00", "2 Tom MOI 13.00"]);
-    await page.getByRole("button", { name: "Compétences" }).click();
-    await expect(page.getByRole("heading", { name: /Réaliser un développement d'application — tous les semestres/ })).toBeVisible();
+    await page.getByRole("button", { name: "UE", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "UE 1 — Réaliser un développement d'application (tous les semestres)" })).toBeVisible();
     // C1 : Tom (12+15+11)/3 = 12.67, Léa (16+10)/2 = 13, Zoé 17
     await expect.poll(() => rowTexts(page)).toEqual(["1 Zoé 17.00", "2 Léa 13.00", "3 Tom MOI 12.67"]);
+    // Matières et SAÉ : seules celles qui ont des moyennes sont proposées
+    await page.getByRole("button", { name: "Matières et SAÉ" }).click();
+    await expect(page.locator(".chips .chip")).toHaveText(["R1.01", "R2.01", "Stage S4"]);
+    await page.locator(".chips").getByRole("button", { name: "R2.01" }).click();
+    await expect(page.getByRole("heading", { name: "R2.01 — Dev. Objets (semestre 2)" })).toBeVisible();
+    await expect.poll(() => rowTexts(page)).toEqual(["1 Zoé 17.00", "2 Tom MOI 15.00", "3 Léa 10.00"]);
+    await expect(page.locator(".views [aria-pressed=true]")).toHaveText("Tous");
 });
 
 test("changer de semestre : chaque vue ne classe que ceux qui ont la moyenne ; semestres vides grisés", async ({ page }) => {

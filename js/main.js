@@ -314,8 +314,11 @@ function categoryChips(students) {
     if (state.category.kind === "general") return null;
     return h(
         "div",
-        { class: "chips", role: "group", "aria-label": state.category.view === "all" ? "Compétence" : state.category.kind === "ue" ? "Unité d'enseignement" : "Matière" },
-        categoriesOfKind(state.category.kind, state.category.view).map((category) => {
+        { class: "chips", role: "group", "aria-label": state.category.kind === "ue" ? "Unité d'enseignement" : "Matière ou SAÉ" },
+        categoriesOfKind(state.category.kind, state.category.view)
+            // Vue « Tous » : seulement les matières et SAÉ où quelqu'un a une moyenne (sinon 128 pastilles)
+            .filter((category) => !category.subjectSemester || category.id === state.category.id || buildLeaderboard(state.students, category).count > 0)
+            .map((category) => {
             const count = buildLeaderboard(students, category).count;
             return h(
                 "button",
@@ -890,7 +893,7 @@ function renderBoard() {
             h(
                 "div",
                 { class: "board-head" },
-                h("div", null, h("h2", null, state.category.kind === "general" ? state.category.name : state.category.view === "all" ? `${state.category.name} — tous les semestres` : `${state.category.code} — ${state.category.name}`), h("p", { class: "hint", dataset: { testid: "count" } }, `${board.count} étudiant${board.count > 1 ? "s" : ""} classé${board.count > 1 ? "s" : ""}${filtered ? " dans la sélection" : ""} · mis à jour à ${state.lastUpdate.toLocaleTimeString("fr-FR")}`))
+                h("div", null, h("h2", null, state.category.kind === "general" ? state.category.name : state.category.subjectSemester ? `${state.category.code} — ${state.category.name} (semestre ${state.category.subjectSemester})` : state.category.view === "all" ? `${state.category.code} — ${state.category.name} (tous les semestres)` : `${state.category.code} — ${state.category.name}`), h("p", { class: "hint", dataset: { testid: "count" } }, `${board.count} étudiant${board.count > 1 ? "s" : ""} classé${board.count > 1 ? "s" : ""}${filtered ? " dans la sélection" : ""} · mis à jour à ${state.lastUpdate.toLocaleTimeString("fr-FR")}`))
             ),
             positionCard(board, filtered),
             boardList(board, filtered)
