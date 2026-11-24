@@ -1,8 +1,8 @@
 {
     "id": "./",
-    "name": "Classement BUT1 Informatique",
+    "name": "Classement BUT Informatique",
     "short_name": "Classement",
-    "description": "Classement en temps réel des étudiants du BUT1 Informatique : moyennes par matière, par UE et générale.",
+    "description": "Classement en temps réel des étudiants du BUT Informatique, du S1 au S6 : moyennes par matière, par UE et générale.",
     "lang": "fr",
     "dir": "ltr",
     "start_url": "./",
